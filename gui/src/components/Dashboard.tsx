@@ -57,6 +57,12 @@ export default function Dashboard() {
   const [connected, setConnected] = useState(false)
   const [selectedView, setSelectedView] = useState<'portfolio' | 'trades' | 'positions'>('portfolio')
   const [selectedSymbol, setSelectedSymbol] = useState<string>('ALL')
+  
+  // Portfolio chart controls
+  const [showTotalValue, setShowTotalValue] = useState(true)
+  const [showCash, setShowCash] = useState(true)
+  const [showPositions, setShowPositions] = useState(true)
+  const [chartZoom, setChartZoom] = useState(100)  // percentage
 
   useEffect(() => {
     fetchData()
@@ -108,25 +114,19 @@ export default function Dashboard() {
     ? tradeHistory 
     : tradeHistory.filter(t => t.symbol === selectedSymbol)
 
-  // FIXED: Calculate P&L from current positions, not trade history
+  // CORRECT CALCULATIONS
   const unrealizedPnL = positions.reduce((sum, p) => sum + p.pnl, 0)
-  
-  // Realized P&L from closed trades only
   const realizedPnL = tradeHistory
     .filter(t => t.action === 'SELL')
     .reduce((sum, t) => sum + t.pnl, 0)
-  
-  // Total P&L = unrealized + realized
   const totalPnL = unrealizedPnL + realizedPnL
 
-  // FIXED: Win rate only from CLOSED positions (SELL trades)
   const closedTrades = tradeHistory.filter(t => t.action === 'SELL')
   const winningTrades = closedTrades.filter(t => t.pnl > 0).length
   const winRate = closedTrades.length > 0 
     ? ((winningTrades / closedTrades.length) * 100).toFixed(1) 
     : '0'
 
-  // FIXED: Portfolio value = cash + positions value
   const latestSnapshot = portfolioHistory.length > 0 
     ? portfolioHistory[portfolioHistory.length - 1]
     : { total_value: 100000, cash: 100000, positions_value: 0 }
@@ -135,15 +135,19 @@ export default function Dashboard() {
   const currentCash = latestSnapshot.cash
   const currentPositionsValue = latestSnapshot.positions_value
 
-  // Starting value
   const startValue = portfolioHistory.length > 0 
     ? portfolioHistory[0].total_value 
     : 100000
 
-  // FIXED: Total return based on actual portfolio change
   const totalReturn = ((currentValue - startValue) / startValue * 100).toFixed(2)
 
-  const chartData = portfolioHistory.map(p => ({
+  // Apply zoom to chart data
+  const totalPoints = portfolioHistory.length
+  const pointsToShow = Math.max(10, Math.floor(totalPoints * (chartZoom / 100)))
+  const startIndex = Math.max(0, totalPoints - pointsToShow)
+  const zoomedHistory = portfolioHistory.slice(startIndex)
+
+  const chartData = zoomedHistory.map(p => ({
     time: new Date(p.timestamp).toLocaleTimeString(),
     value: p.total_value,
     cash: p.cash,
@@ -170,6 +174,10 @@ export default function Dashboard() {
     pnl
   }))
 
+  // Split positions
+  const stockPositions = positions.filter(p => p.asset_type === 'stock')
+  const cryptoPositions = positions.filter(p => p.asset_type === 'crypto')
+
   return (
     <div style={{
       minHeight: '100vh',
@@ -185,7 +193,6 @@ export default function Dashboard() {
           <p style={{ opacity: 0.9 }}>Real-time Portfolio Analytics</p>
         </header>
 
-        {/* ADDED: Trading Mode Selector */}
         <TradingModeSelector onModeChange={(mode) => console.log('Mode changed to:', mode)} />
 
         <div style={{ 
@@ -215,13 +222,13 @@ export default function Dashboard() {
           <StatCard 
             title="Win Rate" 
             value={`${winRate}%`} 
-            subtitle={`${winningTrades} wins / ${closedTrades.length} trades`}
+            subtitle={`${winningTrades} wins / ${closedTrades.length} closed`}
             color={parseFloat(winRate) >= 50 ? '#10b981' : '#ef4444'} 
           />
           <StatCard 
             title="Active Positions" 
             value={positions.length.toString()} 
-            subtitle={`Stocks: ${positions.filter(p => p.asset_type === 'stock').length} | Crypto: ${positions.filter(p => p.asset_type === 'crypto').length}`}
+            subtitle={`Stocks: ${stockPositions.length} | Crypto: ${cryptoPositions.length}`}
             color="#06b6d4" 
           />
           <StatCard 
@@ -290,8 +297,70 @@ export default function Dashboard() {
 
         {selectedView === 'portfolio' && (
           <div style={cardStyle}>
-            <h2 style={{ margin: '0 0 1rem 0' }}>Portfolio Value Over Time</h2>
-            <ResponsiveContainer width="100%" height={300}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
+              <h2 style={{ margin: 0 }}>Portfolio Value Over Time</h2>
+              
+              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                {/* Line toggles */}
+                <div style={{ display: 'flex', gap: '0.75rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 1rem', borderRadius: '0.5rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={showTotalValue} 
+                      onChange={(e) => setShowTotalValue(e.target.checked)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span style={{ color: '#10b981' }}>● Total Value</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={showCash} 
+                      onChange={(e) => setShowCash(e.target.checked)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span style={{ color: '#06b6d4' }}>● Cash</span>
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={showPositions} 
+                      onChange={(e) => setShowPositions(e.target.checked)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span style={{ color: '#f59e0b' }}>● Holdings</span>
+                  </label>
+                </div>
+
+                {/* Zoom controls */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(0,0,0,0.2)', padding: '0.5rem 1rem', borderRadius: '0.5rem' }}>
+                  <span style={{ fontSize: '0.875rem', opacity: 0.8 }}>Zoom:</span>
+                  <button 
+                    onClick={() => setChartZoom(Math.min(200, chartZoom + 25))}
+                    style={{ ...zoomButtonStyle }}
+                  >
+                    🔍+
+                  </button>
+                  <span style={{ fontSize: '0.875rem', fontWeight: 'bold', minWidth: '50px', textAlign: 'center' }}>
+                    {chartZoom}%
+                  </span>
+                  <button 
+                    onClick={() => setChartZoom(Math.max(25, chartZoom - 25))}
+                    style={{ ...zoomButtonStyle }}
+                  >
+                    🔍-
+                  </button>
+                  <button 
+                    onClick={() => setChartZoom(100)}
+                    style={{ ...zoomButtonStyle, padding: '0.25rem 0.75rem' }}
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <ResponsiveContainer width="100%" height={350}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
                 <XAxis dataKey="time" stroke="#fff" />
@@ -301,11 +370,14 @@ export default function Dashboard() {
                   labelStyle={{ color: '#fff' }}
                 />
                 <Legend />
-                <Line type="monotone" dataKey="value" stroke="#10b981" name="Total Value" strokeWidth={2} />
-                <Line type="monotone" dataKey="cash" stroke="#06b6d4" name="Cash" strokeWidth={2} />
-                <Line type="monotone" dataKey="positions" stroke="#f59e0b" name="Positions" strokeWidth={2} />
+                {showTotalValue && <Line type="monotone" dataKey="value" stroke="#10b981" name="Total Value" strokeWidth={2} />}
+                {showCash && <Line type="monotone" dataKey="cash" stroke="#06b6d4" name="Cash" strokeWidth={2} />}
+                {showPositions && <Line type="monotone" dataKey="positions" stroke="#f59e0b" name="Holdings" strokeWidth={2} />}
               </LineChart>
             </ResponsiveContainer>
+            <div style={{ fontSize: '0.75rem', opacity: 0.6, marginTop: '0.5rem', textAlign: 'center' }}>
+              Showing {pointsToShow} of {totalPoints} data points
+            </div>
           </div>
         )}
 
@@ -321,10 +393,12 @@ export default function Dashboard() {
                   background: 'rgba(255,255,255,0.1)',
                   border: '1px solid rgba(255,255,255,0.2)',
                   borderRadius: '0.5rem',
-                  color: '#fff'
+                  color: '#fff',
+                  cursor: 'pointer'
                 }}
+                className="symbol-dropdown"
               >
-                {symbols.map(s => <option key={s} value={s}>{s}</option>)}
+                {symbols.map(s => <option key={s} value={s} style={{ background: '#1e3a8a', color: '#fff' }}>{s}</option>)}
               </select>
             </div>
             <ResponsiveContainer width="100%" height={300}>
@@ -349,81 +423,98 @@ export default function Dashboard() {
 
         {selectedView === 'positions' && (
           <div style={cardStyle}>
-            <h2 style={{ margin: '0 0 1rem 0' }}>🔥 Active Positions ({positions.length} total)</h2>
+            <h2 style={{ margin: '0 0 1.5rem 0' }}>🔥 Active Positions ({positions.length} total)</h2>
             
             {/* Stock Positions */}
-            <h3 style={{ marginTop: '1rem', color: '#10b981' }}>📊 Stocks ({positions.filter(p => p.asset_type === 'stock').length})</h3>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid rgba(255,255,255,0.2)' }}>
-                    <th style={tableHeaderStyle}>Symbol</th>
-                    <th style={tableHeaderStyle}>Quantity</th>
-                    <th style={tableHeaderStyle}>Entry Price</th>
-                    <th style={tableHeaderStyle}>Current Price</th>
-                    <th style={tableHeaderStyle}>Market Value</th>
-                    <th style={tableHeaderStyle}>P&L</th>
-                    <th style={tableHeaderStyle}>P&L %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {positions.filter(p => p.asset_type === 'stock').map((pos, idx) => (
-                    <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                      <td style={tableCellStyle}><strong>{pos.symbol}</strong></td>
-                      <td style={tableCellStyle}>{pos.quantity.toFixed(2)}</td>
-                      <td style={tableCellStyle}>${pos.entry_price.toFixed(2)}</td>
-                      <td style={tableCellStyle}>${pos.current_price.toFixed(2)}</td>
-                      <td style={tableCellStyle}>${pos.market_value.toFixed(2)}</td>
-                      <td style={{ ...tableCellStyle, color: pos.pnl >= 0 ? '#10b981' : '#ef4444', fontWeight: 'bold' }}>
-                        ${pos.pnl.toFixed(2)}
-                      </td>
-                      <td style={{ ...tableCellStyle, color: pos.pnl_percent >= 0 ? '#10b981' : '#ef4444' }}>
-                        {pos.pnl_percent.toFixed(2)}%
-                      </td>
+            <h3 style={{ marginTop: '1rem', color: '#10b981', borderBottom: '2px solid #10b981', paddingBottom: '0.5rem' }}>
+              📊 Stocks ({stockPositions.length})
+            </h3>
+            {stockPositions.length > 0 ? (
+              <div style={{ overflowX: 'auto', marginBottom: '2rem' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid rgba(255,255,255,0.2)' }}>
+                      <th style={tableHeaderStyle}>Symbol</th>
+                      <th style={tableHeaderStyle}>Quantity</th>
+                      <th style={tableHeaderStyle}>Entry Price</th>
+                      <th style={tableHeaderStyle}>Current Price</th>
+                      <th style={tableHeaderStyle}>Market Value</th>
+                      <th style={tableHeaderStyle}>P&L</th>
+                      <th style={tableHeaderStyle}>P&L %</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {stockPositions.map((pos, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                        <td style={tableCellStyle}><strong>{pos.symbol}</strong></td>
+                        <td style={tableCellStyle}>{pos.quantity.toFixed(2)}</td>
+                        <td style={tableCellStyle}>${pos.entry_price.toFixed(2)}</td>
+                        <td style={tableCellStyle}>${pos.current_price.toFixed(2)}</td>
+                        <td style={tableCellStyle}>${pos.market_value.toFixed(2)}</td>
+                        <td style={{ ...tableCellStyle, color: pos.pnl >= 0 ? '#10b981' : '#ef4444', fontWeight: 'bold' }}>
+                          ${pos.pnl.toFixed(2)}
+                        </td>
+                        <td style={{ ...tableCellStyle, color: pos.pnl_percent >= 0 ? '#10b981' : '#ef4444' }}>
+                          {pos.pnl_percent.toFixed(2)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '2rem', opacity: 0.6 }}>
+                No stock positions. Trading will create positions when signals trigger.
+              </div>
+            )}
 
             {/* Crypto Positions */}
-            <h3 style={{ marginTop: '2rem', color: '#f59e0b' }}>₿ Crypto ({positions.filter(p => p.asset_type === 'crypto').length})</h3>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid rgba(255,255,255,0.2)' }}>
-                    <th style={tableHeaderStyle}>Symbol</th>
-                    <th style={tableHeaderStyle}>Quantity</th>
-                    <th style={tableHeaderStyle}>Entry Price</th>
-                    <th style={tableHeaderStyle}>Current Price</th>
-                    <th style={tableHeaderStyle}>Market Value</th>
-                    <th style={tableHeaderStyle}>P&L</th>
-                    <th style={tableHeaderStyle}>P&L %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {positions.filter(p => p.asset_type === 'crypto').map((pos, idx) => (
-                    <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                      <td style={tableCellStyle}><strong>{pos.symbol}</strong></td>
-                      <td style={tableCellStyle}>{pos.quantity.toFixed(6)}</td>
-                      <td style={tableCellStyle}>${pos.entry_price.toFixed(2)}</td>
-                      <td style={tableCellStyle}>${pos.current_price.toFixed(2)}</td>
-                      <td style={tableCellStyle}>${pos.market_value.toFixed(2)}</td>
-                      <td style={{ ...tableCellStyle, color: pos.pnl >= 0 ? '#10b981' : '#ef4444', fontWeight: 'bold' }}>
-                        ${pos.pnl.toFixed(2)}
-                      </td>
-                      <td style={{ ...tableCellStyle, color: pos.pnl_percent >= 0 ? '#10b981' : '#ef4444' }}>
-                        {pos.pnl_percent.toFixed(2)}%
-                      </td>
+            <h3 style={{ marginTop: '2rem', color: '#f59e0b', borderBottom: '2px solid #f59e0b', paddingBottom: '0.5rem' }}>
+              ₿ Crypto ({cryptoPositions.length})
+            </h3>
+            {cryptoPositions.length > 0 ? (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid rgba(255,255,255,0.2)' }}>
+                      <th style={tableHeaderStyle}>Symbol</th>
+                      <th style={tableHeaderStyle}>Quantity</th>
+                      <th style={tableHeaderStyle}>Entry Price</th>
+                      <th style={tableHeaderStyle}>Current Price</th>
+                      <th style={tableHeaderStyle}>Market Value</th>
+                      <th style={tableHeaderStyle}>P&L</th>
+                      <th style={tableHeaderStyle}>P&L %</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {cryptoPositions.map((pos, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                        <td style={tableCellStyle}><strong>{pos.symbol}</strong></td>
+                        <td style={tableCellStyle}>{pos.quantity.toFixed(6)}</td>
+                        <td style={tableCellStyle}>${pos.entry_price.toFixed(2)}</td>
+                        <td style={tableCellStyle}>${pos.current_price.toFixed(2)}</td>
+                        <td style={tableCellStyle}>${pos.market_value.toFixed(2)}</td>
+                        <td style={{ ...tableCellStyle, color: pos.pnl >= 0 ? '#10b981' : '#ef4444', fontWeight: 'bold' }}>
+                          ${pos.pnl.toFixed(2)}
+                        </td>
+                        <td style={{ ...tableCellStyle, color: pos.pnl_percent >= 0 ? '#10b981' : '#ef4444' }}>
+                          {pos.pnl_percent.toFixed(2)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '2rem', opacity: 0.6 }}>
+                No crypto positions. Trading will create positions when signals trigger.
+              </div>
+            )}
 
             {positions.length === 0 && (
-              <div style={{ textAlign: 'center', padding: '2rem', opacity: 0.6 }}>
-                No active positions. Click "Generate Test Data" to create sample positions.
+              <div style={{ textAlign: 'center', padding: '3rem', opacity: 0.6, fontSize: '1.1rem' }}>
+                📭 No active positions yet.<br/>
+                <span style={{ fontSize: '0.9rem' }}>Click "Generate Test Data" to create sample positions or wait for trading signals.</span>
               </div>
             )}
           </div>
@@ -457,6 +548,15 @@ export default function Dashboard() {
             ))}
           </div>
         </div>
+
+        <style>{`
+          .symbol-dropdown option:hover {
+            background-color: #7c3aed !important;
+          }
+          .symbol-dropdown:hover {
+            border-color: #10b981;
+          }
+        `}</style>
       </div>
     </div>
   )
@@ -494,6 +594,17 @@ const tabStyle = {
   color: '#fff',
   cursor: 'pointer',
   fontWeight: 'bold',
+  transition: 'all 0.2s'
+}
+
+const zoomButtonStyle = {
+  padding: '0.25rem 0.5rem',
+  background: 'rgba(255,255,255,0.2)',
+  border: '1px solid rgba(255,255,255,0.3)',
+  borderRadius: '0.25rem',
+  color: '#fff',
+  cursor: 'pointer',
+  fontSize: '0.875rem',
   transition: 'all 0.2s'
 }
 
