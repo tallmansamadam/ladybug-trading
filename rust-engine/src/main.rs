@@ -38,7 +38,8 @@ struct AppState {
     portfolio_history: Arc<RwLock<Vec<PortfolioSnapshot>>>,
     trade_history: Arc<RwLock<Vec<TradeRecord>>>,
     test_positions: Arc<RwLock<Vec<Position>>>,
-    news_symbols: Arc<RwLock<Vec<String>>>,  // NEW: Symbols to track for news
+    news_symbols: Arc<RwLock<Vec<String>>>,
+    trading_mode: Arc<RwLock<TradingMode>>,  // NEW: Trading strategy selector
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -51,6 +52,57 @@ struct Position {
     pnl_percent: f64,
     market_value: f64,
     asset_type: String,  // "stock" or "crypto"
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "PascalCase")]
+enum TradingMode {
+    Conservative,
+    Volatile,
+    Hybrid,
+}
+
+impl TradingMode {
+    fn get_stocks(&self) -> Vec<&'static str> {
+        match self {
+            TradingMode::Conservative => vec![
+                "AAPL", "GOOGL", "MSFT", "TSLA", "AMZN",
+                "NVDA", "META", "NFLX", "AMD", "INTC",
+                "PYPL", "ADBE", "CRM", "ORCL", "QCOM",
+                "TXN", "AVGO", "CSCO", "ASML", "AMAT"
+            ],
+            TradingMode::Volatile => vec![
+                "TSLA", "GME", "AMC", "PLTR", "RIOT",
+                "MARA", "MSTR", "COIN", "ROKU", "SNAP",
+                "NVDA", "AMD", "SQ", "SHOP", "ARKK",
+                "ZM", "UBER", "LYFT", "DKNG", "HOOD"
+            ],
+            TradingMode::Hybrid => vec![
+                // 10 stable
+                "AAPL", "GOOGL", "MSFT", "AMZN", "META",
+                "NFLX", "ADBE", "CRM", "ORCL", "CSCO",
+                // 10 volatile
+                "TSLA", "GME", "PLTR", "RIOT", "COIN",
+                "NVDA", "AMD", "MSTR", "SNAP", "ROKU"
+            ],
+        }
+    }
+
+    fn get_crypto(&self) -> Vec<&'static str> {
+        match self {
+            TradingMode::Conservative => vec![
+                "BTC/USD", "ETH/USD", "XRP/USD"
+            ],
+            TradingMode::Volatile => vec![
+                "BTC/USD", "ETH/USD", "SOL/USD",
+                "DOGE/USD", "AVAX/USD", "MATIC/USD"
+            ],
+            TradingMode::Hybrid => vec![
+                "BTC/USD", "ETH/USD", "SOL/USD",
+                "DOGE/USD", "AVAX/USD"
+            ],
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -127,6 +179,7 @@ async fn main() -> Result<()> {
             "BTC/USD".to_string(),
             "ETH/USD".to_string(),
         ])),
+        trading_mode: Arc::new(RwLock::new(TradingMode::Conservative)),  // Default mode
     };
     
     // Log startup status
@@ -179,6 +232,8 @@ async fn main() -> Result<()> {
         .route("/trades/history", get(get_trade_history))
         .route("/news/symbols", get(get_news_symbols))
         .route("/news/symbols", post(set_news_symbols))
+        .route("/trading-mode", get(get_trading_mode))
+        .route("/trading-mode", post(set_trading_mode))
         .route("/test/generate", post(generate_test_data))
         .route("/test/clear", post(clear_test_data))  // NEW
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -260,14 +315,6 @@ async fn demo_loop(state: AppState) {
 async fn trading_loop(state: AppState) {
     let mut tick = interval(Duration::from_secs(90));
     
-    // Expanded list of active stocks
-    let symbols = vec![
-        "AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", 
-        "NVDA", "META", "NFLX", "AMD", "INTC",
-        "PYPL", "ADBE", "CRM", "ORCL", "QCOM",
-        "TXN", "AVGO", "CSCO", "ASML", "AMAT"
-    ];
-    
     loop {
         tick.tick().await;
         
@@ -276,6 +323,11 @@ async fn trading_loop(state: AppState) {
             continue;
         }
         
+        // Get symbols based on current trading mode
+        let mode = state.trading_mode.read().await;
+        let symbols = mode.get_stocks();
+        
+        info!("📈 Trading Mode: {:?} | Analyzing {} symbols", *mode, symbols.len());
         info!("📈 ========== STOCK TRADING CYCLE START ==========");
         state.logger.info("Stocks", "🔄 Starting market analysis cycle");
         
@@ -483,13 +535,17 @@ async fn process_stock(state: &AppState, symbol: &str) -> Result<String> {
 
 async fn crypto_trading_loop(state: AppState) {
     let mut tick = interval(Duration::from_secs(120));
-    let crypto_symbols = vec!["BTC/USD", "ETH/USD", "XRP/USD"];
     
     loop {
         tick.tick().await;
         let crypto_enabled = *state.crypto_trading_enabled.read().await;
         if !crypto_enabled { continue; }
         
+        // Get crypto symbols based on current trading mode
+        let mode = state.trading_mode.read().await;
+        let crypto_symbols = mode.get_crypto();
+        
+        info!("₿ Trading Mode: {:?} | Analyzing {} crypto", *mode, crypto_symbols.len());
         info!("₿ ========== CRYPTO TRADING CYCLE START ==========");
         state.logger.info("Crypto", "🔄 Starting crypto market analysis");
         
@@ -975,6 +1031,32 @@ async fn clear_test_data(State(state): State<AppState>) -> StatusCode {
     drop(trade_history);
     
     state.logger.success("Test", "✓ Test data cleared successfully");
+    
+    StatusCode::OK
+}
+
+// Get current trading mode
+async fn get_trading_mode(State(state): State<AppState>) -> Json<TradingMode> {
+    let mode = state.trading_mode.read().await;
+    Json(mode.clone())
+}
+
+// Set trading mode
+#[derive(Deserialize)]
+struct TradingModeRequest {
+    mode: TradingMode,
+}
+
+async fn set_trading_mode(
+    State(state): State<AppState>,
+    Json(req): Json<TradingModeRequest>,
+) -> StatusCode {
+    let mut mode = state.trading_mode.write().await;
+    *mode = req.mode.clone();
+    drop(mode);
+    
+    state.logger.success("Config", &format!("Trading mode set to: {:?}", req.mode));
+    info!("🎯 Trading mode changed to: {:?}", req.mode);
     
     StatusCode::OK
 }
