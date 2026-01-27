@@ -37,7 +37,8 @@ struct AppState {
     logger: Arc<ActivityLogger>,
     portfolio_history: Arc<RwLock<Vec<PortfolioSnapshot>>>,
     trade_history: Arc<RwLock<Vec<TradeRecord>>>,
-    test_positions: Arc<RwLock<Vec<Position>>>,  // NEW: Test positions
+    test_positions: Arc<RwLock<Vec<Position>>>,
+    news_symbols: Arc<RwLock<Vec<String>>>,  // NEW: Symbols to track for news
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -119,7 +120,13 @@ async fn main() -> Result<()> {
         logger: logger.clone(),
         portfolio_history: Arc::new(RwLock::new(vec![initial_snapshot])),
         trade_history: Arc::new(RwLock::new(vec![])),
-        test_positions: Arc::new(RwLock::new(vec![])),  // NEW
+        test_positions: Arc::new(RwLock::new(vec![])),
+        news_symbols: Arc::new(RwLock::new(vec![
+            "AAPL".to_string(),
+            "GOOGL".to_string(),
+            "BTC/USD".to_string(),
+            "ETH/USD".to_string(),
+        ])),
     };
     
     // Start news aggregator
@@ -166,6 +173,8 @@ async fn main() -> Result<()> {
         .route("/logs", get(get_logs))
         .route("/portfolio/history", get(get_portfolio_history))
         .route("/trades/history", get(get_trade_history))
+        .route("/news/symbols", get(get_news_symbols))
+        .route("/news/symbols", post(set_news_symbols))
         .route("/test/generate", post(generate_test_data))
         .route("/test/clear", post(clear_test_data))  // NEW
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -688,6 +697,26 @@ async fn get_account(State(state): State<AppState>) -> Result<Json<serde_json::V
 
 async fn get_logs(State(state): State<AppState>) -> Json<Vec<activity::ActivityLog>> {
     Json(state.logger.get_logs())
+}
+
+#[derive(Deserialize)]
+struct NewsSymbolsRequest {
+    symbols: Vec<String>,
+}
+
+async fn get_news_symbols(State(state): State<AppState>) -> Json<Vec<String>> {
+    let symbols = state.news_symbols.read().await;
+    Json(symbols.clone())
+}
+
+async fn set_news_symbols(
+    State(state): State<AppState>,
+    Json(payload): Json<NewsSymbolsRequest>,
+) -> StatusCode {
+    let mut symbols = state.news_symbols.write().await;
+    *symbols = payload.symbols.clone();
+    state.logger.info("News", &format!("Updated news tracking: {:?}", payload.symbols));
+    StatusCode::OK
 }
 
 async fn get_portfolio_history(State(state): State<AppState>) -> Json<Vec<PortfolioSnapshot>> {
