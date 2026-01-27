@@ -1,20 +1,23 @@
-# 🐞 LadyBug Trading Engine
+# 🐞 LadyBug Trading Engine v0.2.0
 
 [![Rust](https://img.shields.io/badge/rust-1.83%2B-orange.svg)](https://www.rust-lang.org/)
 [![Node.js](https://img.shields.io/badge/node.js-20%2B-green.svg)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/tallmansamadam/ladybug-trading)
 
-A high-performance algorithmic trading system built with Rust and TypeScript, featuring real-time market analysis, automated trading execution, and a modern web-based dashboard.
+A high-performance algorithmic trading system built with Rust and TypeScript, featuring real-time market analysis, automated trading execution for both **stocks and cryptocurrencies**, and a modern web-based dashboard.
 
 ## 🚀 Features
 
-- **Real-time Market Analysis**: Technical indicators and sentiment analysis
-- **Automated Trading**: Configurable buy/sell signals with risk management
+- **Real-time Market Analysis**: Technical indicators and sentiment analysis for stocks and crypto
+- **Automated Stock Trading**: 20+ major tech stocks with configurable signals
+- **Cryptocurrency Trading**: Bitcoin (BTC), Ethereum (ETH), and Ripple (XRP) support
 - **Live Dashboard**: Monitor positions, P&L, and trading activity in real-time
 - **Paper Trading**: Test strategies safely with Alpaca's paper trading API
-- **Multi-Asset Support**: Trade 20+ major stocks (AAPL, GOOGL, TSLA, etc.)
+- **Real Market Data**: 100% live prices and historical data from Alpaca (no fake test data)
 - **Activity Logging**: Comprehensive trade and analysis history
 - **Portfolio Tracking**: Real-time portfolio value and performance metrics
+- **Dual Trading Modes**: Independent controls for stock and crypto trading
 
 ## 📋 Prerequisites
 
@@ -103,11 +106,33 @@ Open your browser and navigate to:
 
 ## 📊 Usage
 
-### Enable Trading
+### Enable Stock Trading
 
-1. Open the dashboard at http://localhost:3000
-2. Click the **"Enable Trading"** toggle
-3. Monitor real-time positions and trades
+```bash
+curl -X POST http://localhost:8080/toggle \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
+Or use the dashboard toggle.
+
+### Enable Cryptocurrency Trading
+
+```bash
+curl -X POST http://localhost:8080/toggle/crypto \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
+### View Positions
+
+```bash
+# Stock positions
+curl http://localhost:8080/positions
+
+# Crypto positions
+curl http://localhost:8080/positions/crypto
+```
 
 ### View Logs
 
@@ -117,14 +142,21 @@ Check the `/logs` directory for detailed trading activity logs.
 
 The Rust backend exposes the following endpoints:
 
+**General:**
 - `GET /health` - Health check
-- `GET /status` - Trading status and statistics
-- `GET /positions` - Current open positions
+- `GET /status` - Trading status (stocks + crypto)
 - `GET /account` - Account information
 - `GET /logs` - Activity logs
 - `GET /portfolio/history` - Portfolio value over time
 - `GET /trades/history` - Trade execution history
-- `POST /toggle` - Enable/disable trading
+
+**Stock Trading:**
+- `GET /positions` - Current stock positions
+- `POST /toggle` - Enable/disable stock trading
+
+**Cryptocurrency Trading:**
+- `GET /positions/crypto` - Current crypto positions
+- `POST /toggle/crypto` - Enable/disable crypto trading
 - `POST /test/generate` - Generate test data for demo
 
 ## 🏗️ Project Structure
@@ -155,28 +187,36 @@ ladybug-trading/
 
 Edit `rust-engine/src/main.rs` to adjust:
 
-- **Buy/Sell Thresholds**: Currently set to ±0.15 (very aggressive)
+**Stocks:**
+- **Buy/Sell Thresholds**: ±0.15 (aggressive)
 - **Position Size**: 5% of buying power, max $5,000
-- **Trading Cycle**: Runs every 90 seconds
-- **Monitored Stocks**: 20 major tech stocks
+- **Trading Cycle**: Every 90 seconds
+- **Monitored Stocks**: 20 major tech stocks (AAPL, GOOGL, MSFT, etc.)
+
+**Cryptocurrency:**
+- **Buy/Sell Thresholds**: ±0.25 (conservative - crypto is volatile)
+- **Position Size**: 2% of buying power, max $2,000
+- **Trading Cycle**: Every 120 seconds (2 minutes)
+- **Supported Cryptos**: BTC/USD, ETH/USD, XRP/USD
+- **Fractional Support**: Trade partial coins (e.g., 0.00512 BTC)
 
 ### Risk Management
 
-
+**Stocks:**
 - Maximum position size capped at $5,000
 - Diversification across 20+ stocks
 - Paper trading mode for testing
+
+**Cryptocurrency:**
+- Maximum position size capped at $2,000 (lower due to volatility)
+- Higher signal threshold to reduce false signals
+- Smaller portfolio allocation (2% vs 5%)
+
+**General:**
 - Stop-loss and take-profit logic in technical analysis
+- Real-time data prevents trading on stale information
 
 ## 🧪 Testing
-
-### Generate Test Data
-
-Use the test endpoint to populate the dashboard with sample data:
-
-```bash
-curl -X POST http://localhost:8080/test/generate
-```
 
 ### Run Tests
 
@@ -209,14 +249,23 @@ The LadyBug engine uses a combination of:
    - MACD (Moving Average Convergence Divergence)
    - Volume analysis
 
-2. **Sentiment Analysis**:
-   - News aggregation
-   - Market sentiment scoring
+2. **Real Market Data** (v0.2.0+):
+   - Live prices from Alpaca API
+   - Actual historical bars (not simulated)
+   - Real-time sentiment from news aggregation
 
 3. **Signal Generation**:
-   - Buy signals when technical score > 0.15 and positive sentiment
-   - Sell signals when technical score < -0.15 and negative sentiment
-   - Position sizing based on signal strength
+   
+   **Stocks:**
+   - Buy when technical score > 0.15 + positive sentiment
+   - Sell when technical score < -0.15 + negative sentiment
+   - Position size: 5% of buying power (max $5,000)
+   
+   **Cryptocurrency:**
+   - Buy when technical score > 0.25 + positive sentiment (higher threshold)
+   - Sell when technical score < -0.25 + negative sentiment
+   - Position size: 2% of buying power (max $2,000)
+   - Fractional quantities supported
 
 ## 🔒 Security
 
