@@ -1,0 +1,39 @@
+name: Node.js CI
+
+on:
+  push:
+    branches: [ master, main, develop ]
+  pull_request:
+    branches: [ master, main, develop ]
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [20.x]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        cache-dependency-path: gui/package-lock.json
+    
+    - name: Install dependencies
+      working-directory: ./gui
+      run: npm ci
+    
+    - name: Build
+      working-directory: ./gui
+      run: npm run build
+    
+    - name: Lint (if script exists)
+      working-directory: ./gui
+      run: npm run lint --if-present
+      continue-on-error: true
