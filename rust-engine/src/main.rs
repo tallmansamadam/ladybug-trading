@@ -371,7 +371,7 @@ async fn process_stock(state: &AppState, symbol: &str) -> Result<String> {
     let has_position = positions.iter().any(|p| p.symbol == symbol);
     
     // VERY AGGRESSIVE THRESHOLDS - trades will happen!
-    if signal > 0.15 && !has_position {  // Lowered from 0.2 to 0.15
+    if signal > 0.05 && !has_position {  // Lowered from 0.15 to 0.05 for more activity
         info!("🟢 {} STRONG BUY SIGNAL ({:.3}) - EXECUTING TRADE", symbol, signal);
         state.logger.signal(&format!("🟢 BUY signal ({:.3})", signal), symbol);
         
@@ -433,7 +433,7 @@ async fn process_stock(state: &AppState, symbol: &str) -> Result<String> {
         } else {
             warn!("⚠️  {} - Quantity would be 0, skipping trade", symbol);
         }
-    } else if signal < -0.15 && has_position {  // Lowered from -0.2
+    } else if signal < -0.05 && has_position {  // Lowered from -0.15 to -0.05 for more activity
         info!("🔴 {} STRONG SELL SIGNAL ({:.3}) - EXECUTING TRADE", symbol, signal);
         state.logger.signal(&format!("🔴 SELL signal ({:.3})", signal), symbol);
         
@@ -471,9 +471,9 @@ async fn process_stock(state: &AppState, symbol: &str) -> Result<String> {
         }
     } else {
         if has_position {
-            info!("⚪ {} - Signal {:.3} not strong enough to SELL (threshold: -0.15)", symbol, signal);
+            info!("⚪ {} - Signal {:.3} not strong enough to SELL (threshold: -0.05)", symbol, signal);
         } else {
-            info!("⚪ {} - Signal {:.3} not strong enough to BUY (threshold: 0.15)", symbol, signal);
+            info!("⚪ {} - Signal {:.3} not strong enough to BUY (threshold: 0.05)", symbol, signal);
         }
         return Ok("neutral".to_string());
     }
@@ -564,7 +564,7 @@ async fn process_crypto(state: &AppState, symbol: &str) -> Result<String> {
     let positions = state.alpaca.get_positions().await.unwrap_or_default();
     let has_position = positions.iter().any(|p| p.symbol == symbol);
     
-    if signal > 0.25 && !has_position {
+    if signal > 0.10 && !has_position {  // Lowered from 0.25 to 0.10 for more activity
         info!("🟢 {} BUY SIGNAL ({:.3})", symbol, signal);
         let account = state.alpaca.get_account().await?;
         let buying_power: f64 = account.buying_power.parse().unwrap_or(0.0);
@@ -592,7 +592,7 @@ async fn process_crypto(state: &AppState, symbol: &str) -> Result<String> {
                 Err(e) => error!("❌ CRYPTO ORDER FAILED: {}", e),
             }
         }
-    } else if signal < -0.25 && has_position {
+    } else if signal < -0.10 && has_position {  // Lowered from -0.25 to -0.10
         if let Some(pos) = positions.iter().find(|p| p.symbol == symbol) {
             let pnl: f64 = pos.unrealized_pl.parse().unwrap_or(0.0);
             match state.crypto.close_crypto_position(symbol).await {
