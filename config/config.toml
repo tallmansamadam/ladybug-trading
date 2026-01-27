@@ -1,0 +1,8 @@
+[alpaca]
+api_key = ""
+api_secret = ""
+paper_trading = true
+
+[trading]
+symbols = ["AAPL", "GOOGL", "MSFT"]
+max_positions = 5
