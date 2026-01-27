@@ -52,7 +52,7 @@ export function ProfitBooking({ positions, onRefresh }: ProfitBookingProps) {
     const profitableCount = positions.filter(p => p.pnl > 0).length
     if (!confirm(`Book profits for ALL ${profitableCount} profitable positions?`)) return
     
-    setBooking('all')
+    setBooking('all-profits')
     try {
       const response = await axios.post(`${API_URL}/book-all-profits`)
       const data = response.data
@@ -74,6 +74,80 @@ export function ProfitBooking({ positions, onRefresh }: ProfitBookingProps) {
     }
   }
 
+  const bookAllLosses = async () => {
+    const losingPositions = positions.filter(p => p.pnl < 0)
+    const losingCount = losingPositions.length
+    if (!confirm(`Cut losses on ALL ${losingCount} losing positions?`)) return
+    
+    setBooking('all-losses')
+    try {
+      let closed = 0
+      let failed = 0
+      let totalPnL = 0
+      
+      for (const pos of losingPositions) {
+        try {
+          const response = await axios.post(`${API_URL}/book-profit/${pos.symbol}`)
+          closed++
+          totalPnL += response.data.pnl || 0
+        } catch {
+          failed++
+        }
+      }
+      
+      // Immediate refresh
+      onRefresh()
+      
+      // Wait 1s for all to process
+      setTimeout(() => {
+        onRefresh()
+      }, 1000)
+      
+      const message = `✅ Closed ${closed} losing positions!\nTotal Loss: $${totalPnL.toFixed(2)}${failed > 0 ? `\n⚠️ ${failed} failed` : ''}`
+      alert(message)
+    } catch (err) {
+      alert('❌ Failed to cut losses')
+    } finally {
+      setBooking(null)
+    }
+  }
+
+  const bookAllPositions = async () => {
+    if (!confirm(`Close ALL ${positions.length} positions (profits AND losses)?`)) return
+    
+    setBooking('all-positions')
+    try {
+      let closed = 0
+      let failed = 0
+      let totalPnL = 0
+      
+      for (const pos of positions) {
+        try {
+          const response = await axios.post(`${API_URL}/book-profit/${pos.symbol}`)
+          closed++
+          totalPnL += response.data.pnl || 0
+        } catch {
+          failed++
+        }
+      }
+      
+      // Immediate refresh
+      onRefresh()
+      
+      // Wait 1s for all to process
+      setTimeout(() => {
+        onRefresh()
+      }, 1000)
+      
+      const message = `✅ Closed ${closed} positions!\nTotal P&L: $${totalPnL.toFixed(2)}${failed > 0 ? `\n⚠️ ${failed} failed` : ''}`
+      alert(message)
+    } catch (err) {
+      alert('❌ Failed to close all positions')
+    } finally {
+      setBooking(null)
+    }
+  }
+
   const filteredPositions = positions.filter(p => {
     if (filter === 'profitable') return p.pnl > 0
     if (filter === 'losing') return p.pnl < 0
@@ -81,7 +155,9 @@ export function ProfitBooking({ positions, onRefresh }: ProfitBookingProps) {
   })
 
   const profitablePositions = positions.filter(p => p.pnl > 0)
+  const losingPositions = positions.filter(p => p.pnl < 0)
   const totalUnrealizedProfit = profitablePositions.reduce((sum, p) => sum + p.pnl, 0)
+  const totalUnrealizedLoss = losingPositions.reduce((sum, p) => sum + p.pnl, 0)
 
   return (
     <div style={{
@@ -112,18 +188,14 @@ export function ProfitBooking({ positions, onRefresh }: ProfitBookingProps) {
             {expanded ? '▼' : '▶'} Click to {expanded ? 'collapse' : 'expand'}
           </span>
         </h2>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '0.875rem', opacity: 0.7 }}>Unrealized Profit</div>
-            <div style={{ 
-              fontSize: '1.5rem', 
-              fontWeight: 'bold', 
-              color: totalUnrealizedProfit >= 0 ? '#10b981' : '#ef4444' 
-            }}>
-              ${totalUnrealizedProfit.toFixed(2)}
+            <div style={{ fontSize: '0.75rem', opacity: 0.7 }}>Unrealized P&L</div>
+            <div style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#10b981' }}>
+              Profit: ${totalUnrealizedProfit.toFixed(2)}
             </div>
-            <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>
-              {profitablePositions.length} profitable positions
+            <div style={{ fontSize: '0.875rem', fontWeight: 'bold', color: '#ef4444' }}>
+              Loss: ${totalUnrealizedLoss.toFixed(2)}
             </div>
           </div>
           <button
@@ -133,19 +205,58 @@ export function ProfitBooking({ positions, onRefresh }: ProfitBookingProps) {
             }}
             disabled={booking !== null || profitablePositions.length === 0}
             style={{
-              padding: '0.75rem 1.5rem',
+              padding: '0.6rem 1.2rem',
               background: profitablePositions.length > 0 ? '#10b981' : '#555',
               border: 'none',
               borderRadius: '0.5rem',
               color: '#fff',
               cursor: profitablePositions.length > 0 ? 'pointer' : 'not-allowed',
               fontWeight: 'bold',
-              fontSize: '1rem',
-              transition: 'all 0.2s',
-              opacity: booking === 'all' ? 0.5 : 1
+              fontSize: '0.875rem',
+              opacity: booking === 'all-profits' ? 0.5 : 1
             }}
           >
-            {booking === 'all' ? '⏳ Booking...' : '💰 Book ALL Profits'}
+            {booking === 'all-profits' ? '⏳' : '💰 Book All Profits'}
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              bookAllLosses()
+            }}
+            disabled={booking !== null || losingPositions.length === 0}
+            style={{
+              padding: '0.6rem 1.2rem',
+              background: losingPositions.length > 0 ? '#ef4444' : '#555',
+              border: 'none',
+              borderRadius: '0.5rem',
+              color: '#fff',
+              cursor: losingPositions.length > 0 ? 'pointer' : 'not-allowed',
+              fontWeight: 'bold',
+              fontSize: '0.875rem',
+              opacity: booking === 'all-losses' ? 0.5 : 1
+            }}
+          >
+            {booking === 'all-losses' ? '⏳' : '✂️ Cut All Losses'}
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              bookAllPositions()
+            }}
+            disabled={booking !== null || positions.length === 0}
+            style={{
+              padding: '0.6rem 1.2rem',
+              background: positions.length > 0 ? '#7c3aed' : '#555',
+              border: 'none',
+              borderRadius: '0.5rem',
+              color: '#fff',
+              cursor: positions.length > 0 ? 'pointer' : 'not-allowed',
+              fontWeight: 'bold',
+              fontSize: '0.875rem',
+              opacity: booking === 'all-positions' ? 0.5 : 1
+            }}
+          >
+            {booking === 'all-positions' ? '⏳' : '🔄 Close All'}
           </button>
         </div>
       </div>
