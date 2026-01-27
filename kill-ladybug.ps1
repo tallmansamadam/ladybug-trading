@@ -7,12 +7,12 @@ if ($processes) {
     foreach ($proc in $processes) {
         Write-Host "Attempting graceful shutdown of PID $($proc.Id)..." -ForegroundColor Cyan
         
-        # Try graceful close first (sends WM_CLOSE message)
+        # Try graceful close first
         try {
             $proc.CloseMainWindow() | Out-Null
             Start-Sleep -Milliseconds 500
             
-            # Check if it's still running
+            # Check if still running
             if (!$proc.HasExited) {
                 Write-Host "Process still running, forcing termination..." -ForegroundColor Yellow
                 Stop-Process -Id $proc.Id -Force
