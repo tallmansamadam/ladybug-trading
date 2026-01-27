@@ -179,7 +179,7 @@ async fn main() -> Result<()> {
             "BTC/USD".to_string(),
             "ETH/USD".to_string(),
         ])),
-        trading_mode: Arc::new(RwLock::new(TradingMode::Conservative)),  // Default mode
+        trading_mode: Arc::new(RwLock::new(TradingMode::Hybrid)),  // Default to Hybrid mode
     };
     
     // Log startup status
@@ -782,7 +782,13 @@ async fn get_positions(State(state): State<AppState>) -> Json<Vec<Position>> {
                 let pnl = p.unrealized_pl.parse().unwrap_or(0.0);
                 let market_value = qty * current;
                 let pnl_percent = if entry > 0.0 { ((current - entry) / entry) * 100.0 } else { 0.0 };
-                let asset_type = if p.symbol.contains("/") { "crypto" } else { "stock" };
+                
+                // Detect crypto: contains "/" OR ends with "USD" (Alpaca format)
+                let is_crypto = p.symbol.contains("/") || 
+                               p.symbol.ends_with("USD") && 
+                               !p.symbol.starts_with("USD") &&
+                               p.symbol.len() > 3;
+                let asset_type = if is_crypto { "crypto" } else { "stock" };
                 
                 Position {
                     symbol: p.symbol.clone(),
@@ -890,7 +896,13 @@ async fn get_crypto_positions(State(state): State<AppState>) -> Json<Vec<Positio
     match state.alpaca.get_positions().await {
         Ok(positions) => {
             let crypto_positions: Vec<Position> = positions.iter()
-                .filter(|p| p.symbol.contains("/"))
+                .filter(|p| {
+                    // Crypto: contains "/" OR ends with "USD" (like BTCUSD, ETHUSD)
+                    p.symbol.contains("/") || 
+                    (p.symbol.ends_with("USD") && 
+                     !p.symbol.starts_with("USD") &&
+                     p.symbol.len() > 3)
+                })
                 .map(|p| {
                     let qty = p.qty.parse().unwrap_or(0.0);
                     let entry = p.avg_entry_price.parse().unwrap_or(0.0);
@@ -922,13 +934,17 @@ async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
     let mut test_positions = state.test_positions.write().await;
     test_positions.clear();
     
-    // ALL stock symbols we trade
-    let stock_symbols = vec!["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "NFLX", 
-                             "AMD", "INTC", "PYPL", "ADBE", "CRM", "ORCL", "QCOM", "TXN", 
-                             "AVGO", "CSCO", "ASML", "AMAT"];
+    // Get symbols from CURRENT trading mode
+    let mode = state.trading_mode.read().await;
+    let stock_symbols = mode.get_stocks();
+    let crypto_symbols = mode.get_crypto();
+    
+    info!("📊 Generating test data for mode: {:?}", *mode);
+    info!("   Stocks: {} symbols", stock_symbols.len());
+    info!("   Crypto: {} symbols", crypto_symbols.len());
     
     // Fetch LIVE prices for stocks
-    for symbol in &stock_symbols {
+    for symbol in stock_symbols {
         match state.alpaca.get_latest_quote(symbol).await {
             Ok(current_price) => {
                 let entry_multiplier = rand::random::<f64>() * 0.16 - 0.08; // -8% to +8%
@@ -958,11 +974,8 @@ async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
         }
     }
     
-    // ALL crypto symbols we trade
-    let crypto_symbols = vec!["BTC/USD", "ETH/USD", "XRP/USD"];
-    
-    // Fetch LIVE prices for crypto
-    for symbol in &crypto_symbols {
+    // Fetch LIVE prices for crypto from current mode
+    for symbol in crypto_symbols {
         match state.crypto.get_latest_crypto_price(symbol).await {
             Ok(current_price) => {
                 let entry_multiplier = rand::random::<f64>() * 0.24 - 0.12; // -12% to +12%
