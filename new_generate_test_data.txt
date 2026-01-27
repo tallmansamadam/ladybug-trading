@@ -1,0 +1,153 @@
+async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
+    state.logger.info("Test", "🧪 Generating test data with LIVE prices...");
+    
+    let mut test_positions = state.test_positions.write().await;
+    test_positions.clear();
+    
+    // ALL stock symbols we trade
+    let stock_symbols = vec!["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "NFLX", 
+                             "AMD", "INTC", "PYPL", "ADBE", "CRM", "ORCL", "QCOM", "TXN", 
+                             "AVGO", "CSCO", "ASML", "AMAT"];
+    
+    // Fetch LIVE prices for stocks
+    for symbol in &stock_symbols {
+        match state.alpaca.get_latest_quote(symbol).await {
+            Ok(quote) => {
+                let current_price = quote.ask_price;
+                let entry_multiplier = rand::random::<f64>() * 0.16 - 0.08; // -8% to +8%
+                let entry_price = current_price / (1.0 + entry_multiplier);
+                let quantity = (rand::random::<f64>() * 15.0 + 5.0).floor(); // 5-20 shares
+                
+                let pnl = (current_price - entry_price) * quantity;
+                let pnl_percent = ((current_price - entry_price) / entry_price) * 100.0;
+                let market_value = current_price * quantity;
+                
+                test_positions.push(Position {
+                    symbol: symbol.to_string(),
+                    quantity,
+                    entry_price,
+                    current_price,
+                    pnl,
+                    pnl_percent,
+                    market_value,
+                    asset_type: "stock".to_string(),
+                });
+                
+                state.logger.info("Test", &format!("📈 {} @ ${:.2}", symbol, current_price));
+            },
+            Err(e) => {
+                state.logger.warning("Test", &format!("⚠️ Failed to get price for {}: {}", symbol, e));
+            }
+        }
+    }
+    
+    // ALL crypto symbols we trade
+    let crypto_symbols = vec!["BTC/USD", "ETH/USD", "XRP/USD"];
+    
+    // Fetch LIVE prices for crypto
+    for symbol in &crypto_symbols {
+        match state.crypto.get_latest_crypto_price(symbol).await {
+            Ok(quote) => {
+                let current_price = quote.ask_price;
+                let entry_multiplier = rand::random::<f64>() * 0.24 - 0.12; // -12% to +12%
+                let entry_price = current_price / (1.0 + entry_multiplier);
+                
+                let quantity = if symbol.contains("BTC") {
+                    rand::random::<f64>() * 0.2 + 0.05 // 0.05-0.25 BTC
+                } else if symbol.contains("ETH") {
+                    rand::random::<f64>() * 3.5 + 1.5 // 1.5-5.0 ETH
+                } else {
+                    (rand::random::<f64>() * 2000.0 + 1000.0).floor() // 1000-3000 XRP
+                };
+                
+                let pnl = (current_price - entry_price) * quantity;
+                let pnl_percent = ((current_price - entry_price) / entry_price) * 100.0;
+                let market_value = current_price * quantity;
+                
+                test_positions.push(Position {
+                    symbol: symbol.to_string(),
+                    quantity,
+                    entry_price,
+                    current_price,
+                    pnl,
+                    pnl_percent,
+                    market_value,
+                    asset_type: "crypto".to_string(),
+                });
+                
+                state.logger.info("Test", &format!("₿ {} @ ${:.2}", symbol, current_price));
+            },
+            Err(e) => {
+                state.logger.warning("Test", &format!("⚠️ Failed to get price for {}: {}", symbol, e));
+            }
+        }
+    }
+    
+    let total = test_positions.len();
+    drop(test_positions);
+    
+    // Generate portfolio snapshots
+    let base_time = Utc::now();
+    let mut portfolio_history = state.portfolio_history.write().await;
+    portfolio_history.clear();
+    
+    let initial = 100000.0;
+    for i in 0..30 {
+        let trend = (i as f64) * 100.0;
+        let volatility = (rand::random::<f64>() * 1300.0) - 500.0;
+        let total_value = initial + trend + volatility;
+        let pos_pct = rand::random::<f64>() * 0.30 + 0.15;
+        let positions_value = total_value * pos_pct;
+        
+        portfolio_history.push(PortfolioSnapshot {
+            timestamp: (base_time - chrono::Duration::minutes(30 - i)).to_rfc3339(),
+            total_value,
+            cash: total_value - positions_value,
+            positions_value,
+        });
+    }
+    drop(portfolio_history);
+    
+    // Generate trade history
+    let mut trade_history = state.trade_history.write().await;
+    trade_history.clear();
+    
+    let all_symbols = vec!["AAPL", "GOOGL", "NVDA", "TSLA", "BTC/USD", "ETH/USD"];
+    for i in 0..(rand::random::<usize>() % 7 + 8) {
+        let symbol = all_symbols[rand::random::<usize>() % all_symbols.len()];
+        let action = if i % 3 == 0 { "SELL" } else { "BUY" };
+        let qty = if symbol.contains("/") {
+            rand::random::<f64>() * 1.9 + 0.1
+        } else {
+            (rand::random::<f64>() * 15.0 + 5.0).floor()
+        };
+        let price = if symbol.contains("BTC") {
+            rand::random::<f64>() * 20000.0 + 85000.0
+        } else if symbol.contains("ETH") {
+            rand::random::<f64>() * 1000.0 + 3000.0
+        } else {
+            rand::random::<f64>() * 350.0 + 150.0
+        };
+        let pnl = if action == "SELL" {
+            qty * (rand::random::<f64>() * 200.0 - 50.0)
+        } else {
+            0.0
+        };
+        
+        trade_history.push(TradeRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: (base_time - chrono::Duration::minutes(30 - i as i64 * 2)).to_rfc3339(),
+            symbol: symbol.to_string(),
+            action: action.to_string(),
+            quantity: qty,
+            price,
+            pnl,
+        });
+    }
+    
+    let trades = trade_history.len();
+    drop(trade_history);
+    
+    state.logger.success("Test", &format!("✓ Generated {} positions (LIVE prices), {} trades", total, trades));
+    StatusCode::OK
+}

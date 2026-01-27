@@ -115,8 +115,8 @@ async fn main() -> Result<()> {
         alpaca: alpaca.clone(),
         crypto: crypto.clone(),
         news: news.clone(),
-        trading_enabled: Arc::new(RwLock::new(false)),
-        crypto_trading_enabled: Arc::new(RwLock::new(false)),
+        trading_enabled: Arc::new(RwLock::new(true)),  // AUTO-ENABLED
+        crypto_trading_enabled: Arc::new(RwLock::new(true)),  // AUTO-ENABLED
         logger: logger.clone(),
         portfolio_history: Arc::new(RwLock::new(vec![initial_snapshot])),
         trade_history: Arc::new(RwLock::new(vec![])),
@@ -128,6 +128,10 @@ async fn main() -> Result<()> {
             "ETH/USD".to_string(),
         ])),
     };
+    
+    // Log startup status
+    logger.success("System", "✅ Stock Trading AUTO-ENABLED");
+    logger.success("System", "✅ Crypto Trading AUTO-ENABLED");
     
     // Start news aggregator
     let news_clone = news.clone();
@@ -794,91 +798,89 @@ async fn get_crypto_positions(State(state): State<AppState>) -> Json<Vec<Positio
 }
 
 async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
-    state.logger.info("Test", "🧪 Generating test data with stocks and crypto...");
+    state.logger.info("Test", "🧪 Generating test data with LIVE prices...");
     
-    // Generate test positions (stocks + crypto)
     let mut test_positions = state.test_positions.write().await;
     test_positions.clear();
     
-    // Stock positions
-    test_positions.push(Position {
-        symbol: "AAPL".to_string(),
-        quantity: 15.0,
-        entry_price: 175.50,
-        current_price: 178.45,
-        pnl: 44.25,
-        pnl_percent: 1.68,
-        market_value: 2676.75,
-        asset_type: "stock".to_string(),
-    });
+    // ALL stock symbols we trade
+    let stock_symbols = vec!["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA", "META", "NFLX", 
+                             "AMD", "INTC", "PYPL", "ADBE", "CRM", "ORCL", "QCOM", "TXN", 
+                             "AVGO", "CSCO", "ASML", "AMAT"];
     
-    test_positions.push(Position {
-        symbol: "GOOGL".to_string(),
-        quantity: 8.0,
-        entry_price: 142.30,
-        current_price: 145.80,
-        pnl: 28.00,
-        pnl_percent: 2.46,
-        market_value: 1166.40,
-        asset_type: "stock".to_string(),
-    });
+    // Fetch LIVE prices for stocks
+    for symbol in &stock_symbols {
+        match state.alpaca.get_latest_quote(symbol).await {
+            Ok(current_price) => {
+                let entry_multiplier = rand::random::<f64>() * 0.16 - 0.08; // -8% to +8%
+                let entry_price = current_price / (1.0 + entry_multiplier);
+                let quantity = (rand::random::<f64>() * 15.0 + 5.0).floor(); // 5-20 shares
+                
+                let pnl = (current_price - entry_price) * quantity;
+                let pnl_percent = ((current_price - entry_price) / entry_price) * 100.0;
+                let market_value = current_price * quantity;
+                
+                test_positions.push(Position {
+                    symbol: symbol.to_string(),
+                    quantity,
+                    entry_price,
+                    current_price,
+                    pnl,
+                    pnl_percent,
+                    market_value,
+                    asset_type: "stock".to_string(),
+                });
+                
+                state.logger.info("Test", &format!("📈 {} @ ${:.2}", symbol, current_price));
+            },
+            Err(e) => {
+                state.logger.warning("Test", &format!("⚠️ Failed to get price for {}: {}", symbol, e));
+            }
+        }
+    }
     
-    test_positions.push(Position {
-        symbol: "NVDA".to_string(),
-        quantity: 20.0,
-        entry_price: 495.20,
-        current_price: 512.35,
-        pnl: 343.00,
-        pnl_percent: 3.46,
-        market_value: 10247.00,
-        asset_type: "stock".to_string(),
-    });
+    // ALL crypto symbols we trade
+    let crypto_symbols = vec!["BTC/USD", "ETH/USD", "XRP/USD"];
     
-    test_positions.push(Position {
-        symbol: "TSLA".to_string(),
-        quantity: 12.0,
-        entry_price: 238.75,
-        current_price: 232.10,
-        pnl: -79.80,
-        pnl_percent: -2.79,
-        market_value: 2785.20,
-        asset_type: "stock".to_string(),
-    });
+    // Fetch LIVE prices for crypto
+    for symbol in &crypto_symbols {
+        match state.crypto.get_latest_crypto_price(symbol).await {
+            Ok(current_price) => {
+                let entry_multiplier = rand::random::<f64>() * 0.24 - 0.12; // -12% to +12%
+                let entry_price = current_price / (1.0 + entry_multiplier);
+                
+                let quantity = if symbol.contains("BTC") {
+                    rand::random::<f64>() * 0.2 + 0.05 // 0.05-0.25 BTC
+                } else if symbol.contains("ETH") {
+                    rand::random::<f64>() * 3.5 + 1.5 // 1.5-5.0 ETH
+                } else {
+                    (rand::random::<f64>() * 2000.0 + 1000.0).floor() // 1000-3000 XRP
+                };
+                
+                let pnl = (current_price - entry_price) * quantity;
+                let pnl_percent = ((current_price - entry_price) / entry_price) * 100.0;
+                let market_value = current_price * quantity;
+                
+                test_positions.push(Position {
+                    symbol: symbol.to_string(),
+                    quantity,
+                    entry_price,
+                    current_price,
+                    pnl,
+                    pnl_percent,
+                    market_value,
+                    asset_type: "crypto".to_string(),
+                });
+                
+                state.logger.info("Test", &format!("₿ {} @ ${:.2}", symbol, current_price));
+            },
+            Err(e) => {
+                state.logger.warning("Test", &format!("⚠️ Failed to get price for {}: {}", symbol, e));
+            }
+        }
+    }
     
-    // Crypto positions
-    test_positions.push(Position {
-        symbol: "BTC/USD".to_string(),
-        quantity: 0.125,
-        entry_price: 92500.00,
-        current_price: 94567.23,
-        pnl: 258.40,
-        pnl_percent: 2.23,
-        market_value: 11820.90,
-        asset_type: "crypto".to_string(),
-    });
-    
-    test_positions.push(Position {
-        symbol: "ETH/USD".to_string(),
-        quantity: 3.5,
-        entry_price: 3420.50,
-        current_price: 3512.75,
-        pnl: 322.88,
-        pnl_percent: 2.70,
-        market_value: 12294.63,
-        asset_type: "crypto".to_string(),
-    });
-    
-    test_positions.push(Position {
-        symbol: "XRP/USD".to_string(),
-        quantity: 1500.0,
-        entry_price: 0.62,
-        current_price: 0.58,
-        pnl: -60.00,
-        pnl_percent: -6.45,
-        market_value: 870.00,
-        asset_type: "crypto".to_string(),
-    });
-    
+    let total = test_positions.len();
     drop(test_positions);
     
     // Generate portfolio snapshots
@@ -886,77 +888,67 @@ async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
     let mut portfolio_history = state.portfolio_history.write().await;
     portfolio_history.clear();
     
+    let initial = 100000.0;
     for i in 0..30 {
-        let value = 100000.0 + (i as f64 * 650.0) - (i as f64 % 4 as f64 * 300.0);
-        let positions_val = (i as f64 * 450.0).min(35000.0);
+        let trend = (i as f64) * 100.0;
+        let volatility = (rand::random::<f64>() * 1300.0) - 500.0;
+        let total_value = initial + trend + volatility;
+        let pos_pct = rand::random::<f64>() * 0.30 + 0.15;
+        let positions_value = total_value * pos_pct;
         
         portfolio_history.push(PortfolioSnapshot {
             timestamp: (base_time - chrono::Duration::minutes(30 - i)).to_rfc3339(),
-            total_value: value,
-            cash: value - positions_val,
-            positions_value: positions_val,
+            total_value,
+            cash: total_value - positions_value,
+            positions_value,
         });
     }
     drop(portfolio_history);
     
-    // Generate trade history (stocks + crypto)
-    let test_trades = vec![
-        ("AAPL", "BUY", 15.0, 175.50, 0.0),
-        ("GOOGL", "BUY", 8.0, 142.30, 0.0),
-        ("BTC/USD", "BUY", 0.125, 92500.00, 0.0),
-        ("NVDA", "BUY", 20.0, 495.20, 0.0),
-        ("ETH/USD", "BUY", 3.5, 3420.50, 0.0),
-        ("TSLA", "BUY", 12.0, 238.75, 0.0),
-        ("XRP/USD", "BUY", 1500.0, 0.62, 0.0),
-        ("AAPL", "SELL", 5.0, 178.25, 13.75),
-        ("BTC/USD", "PARTIAL_SELL", 0.025, 94000.00, 37.50),
-    ];
-    
+    // Generate trade history
     let mut trade_history = state.trade_history.write().await;
     trade_history.clear();
     
-    for (i, (symbol, action, qty, price, pnl)) in test_trades.iter().enumerate() {
+    let all_symbols = vec!["AAPL", "GOOGL", "NVDA", "TSLA", "BTC/USD", "ETH/USD"];
+    for i in 0..(rand::random::<usize>() % 7 + 8) {
+        let symbol = all_symbols[rand::random::<usize>() % all_symbols.len()];
+        let action = if i % 3 == 0 { "SELL" } else { "BUY" };
+        let qty = if symbol.contains("/") {
+            rand::random::<f64>() * 1.9 + 0.1
+        } else {
+            (rand::random::<f64>() * 15.0 + 5.0).floor()
+        };
+        let price = if symbol.contains("BTC") {
+            rand::random::<f64>() * 20000.0 + 85000.0
+        } else if symbol.contains("ETH") {
+            rand::random::<f64>() * 1000.0 + 3000.0
+        } else {
+            rand::random::<f64>() * 350.0 + 150.0
+        };
+        let pnl = if action == "SELL" {
+            qty * (rand::random::<f64>() * 200.0 - 50.0)
+        } else {
+            0.0
+        };
+        
         trade_history.push(TradeRecord {
             id: uuid::Uuid::new_v4().to_string(),
-            timestamp: (base_time - chrono::Duration::minutes(30 - i as i64 * 3)).to_rfc3339(),
+            timestamp: (base_time - chrono::Duration::minutes(30 - i as i64 * 2)).to_rfc3339(),
             symbol: symbol.to_string(),
             action: action.to_string(),
-            quantity: *qty,
-            price: *price,
-            pnl: *pnl,
+            quantity: qty,
+            price,
+            pnl,
         });
-        
-        state.logger.trade(
-            if *pnl > 0.0 { LogLevel::Success } else { LogLevel::Info },
-            &format!("{} {} units at ${:.2} | P&L: ${:.2}", action, qty, price, pnl),
-            symbol
-        );
     }
+    
+    let trades = trade_history.len();
     drop(trade_history);
     
-    // Generate analysis logs (stocks + crypto)
-    let analysis_data = vec![
-        ("AAPL", 178.45, 0.75, 0.35, "stock"),
-        ("GOOGL", 145.80, 0.65, 0.20, "stock"),
-        ("NVDA", 512.35, 0.82, 0.45, "stock"),
-        ("TSLA", 232.10, -0.55, -0.15, "stock"),
-        ("BTC/USD", 94567.23, 0.68, 0.25, "crypto"),
-        ("ETH/USD", 3512.75, 0.72, 0.30, "crypto"),
-        ("XRP/USD", 0.58, -0.45, -0.10, "crypto"),
-    ];
-    
-    for (symbol, price, signal, sentiment, asset_type) in analysis_data {
-        let emoji = if asset_type == "crypto" { "₿" } else { "📈" };
-        state.logger.analysis(
-            &format!("{} Price: ${:.2} | Signal: {:.2} | Sentiment: {:.2}", emoji, price, signal, sentiment),
-            symbol
-        );
-    }
-    
-    state.logger.success("Test", "✓ Test data generated: 7 positions (4 stocks + 3 crypto), 30 portfolio snapshots, 9 trades");
-    
+    state.logger.success("Test", &format!("✓ Generated {} positions (LIVE prices), {} trades", total, trades));
     StatusCode::OK
 }
+
 
 async fn clear_test_data(State(state): State<AppState>) -> StatusCode {
     state.logger.info("Test", "🧹 Clearing test data...");

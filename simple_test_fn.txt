@@ -1,0 +1,26 @@
+async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
+    use rand::Rng;
+    
+    state.logger.info("Test", "🧪 Generating randomized test data...");
+    
+    let mut rng = rand::thread_rng();
+    let mut test_positions = state.test_positions.write().await;
+    test_positions.clear();
+    
+    // Simple hardcoded for now - will randomize next
+    test_positions.push(Position {
+        symbol: "AAPL".to_string(),
+        quantity: 15.0,
+        entry_price: 175.50,
+        current_price: 178.45,
+        pnl: 44.25,
+        pnl_percent: 1.68,
+        market_value: 2676.75,
+        asset_type: "stock".to_string(),
+    });
+    
+    drop(test_positions);
+    
+    state.logger.success("Test", "✓ Test data generated");
+    StatusCode::OK
+}
