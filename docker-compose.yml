@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # Backend Trading Engine
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ladybug-backend
+    ports:
+      - "8080:8080"
+    environment:
+      # Alpaca API Configuration
+      - APCA_API_KEY_ID=${APCA_API_KEY_ID}
+      - APCA_API_SECRET_KEY=${APCA_API_SECRET_KEY}
+      - APCA_API_BASE_URL=https://paper-api.alpaca.markets
+      
+      # Logging
+      - RUST_LOG=info
+      
+      # Auto-enable trading (already default in code)
+      - TRADING_ENABLED=true
+      - CRYPTO_TRADING_ENABLED=true
+    
+    env_file:
+      - rust-engine/.env
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    networks:
+      - ladybug-network
+
+  # Frontend Dashboard
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: ladybug-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    environment:
+      - REACT_APP_API_URL=http://localhost:8080
+    restart: unless-stopped
+    networks:
+      - ladybug-network
+
+networks:
+  ladybug-network:
+    driver: bridge
+
+volumes:
+  # Optional: Persist logs or data
+  ladybug-data:
