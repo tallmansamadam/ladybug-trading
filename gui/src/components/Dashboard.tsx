@@ -143,18 +143,24 @@ export default function Dashboard() {
 
   const totalReturn = ((currentValue - startValue) / startValue * 100).toFixed(2)
 
-  // Apply zoom to chart data
+  // PROPER ZOOM: Calculate domain based on zoom level
   const totalPoints = portfolioHistory.length
-  const pointsToShow = Math.max(10, Math.floor(totalPoints * (chartZoom / 100)))
-  const startIndex = Math.max(0, totalPoints - pointsToShow)
-  const zoomedHistory = portfolioHistory.slice(startIndex)
-
-  const chartData = zoomedHistory.map(p => ({
+  const chartData = portfolioHistory.map((p, idx) => ({
+    index: idx,
     time: new Date(p.timestamp).toLocaleTimeString(),
     value: p.total_value,
     cash: p.cash,
     positions: p.positions_value
   }))
+
+  // Zoom controls the visible domain range
+  // 100% = show all data, 50% = show half, 200% = show double (more detail)
+  const visiblePoints = Math.max(5, Math.floor(totalPoints / (chartZoom / 100)))
+  const endIndex = totalPoints - 1
+  const startIndex = Math.max(0, endIndex - visiblePoints + 1)
+  
+  // Domain for X-axis (index-based for smooth zooming)
+  const xDomain = [startIndex, endIndex]
 
   const tradePnLData = filteredTrades
     .filter(t => t.action === 'SELL')
@@ -365,20 +371,37 @@ export default function Dashboard() {
             <ResponsiveContainer width="100%" height={350}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                <XAxis dataKey="time" stroke="#fff" />
+                <XAxis 
+                  dataKey="index" 
+                  stroke="#fff" 
+                  domain={xDomain}
+                  type="number"
+                  tickFormatter={(value) => {
+                    const point = chartData[value]
+                    return point ? point.time : ''
+                  }}
+                  ticks={Array.from(
+                    { length: Math.min(10, visiblePoints) }, 
+                    (_, i) => Math.floor(startIndex + (i * (endIndex - startIndex) / 9))
+                  )}
+                />
                 <YAxis stroke="#fff" />
                 <Tooltip 
                   contentStyle={{ background: 'rgba(0,0,0,0.8)', border: 'none', borderRadius: '0.5rem' }}
                   labelStyle={{ color: '#fff' }}
+                  labelFormatter={(value) => {
+                    const point = chartData[value]
+                    return point ? point.time : ''
+                  }}
                 />
                 <Legend />
-                {showTotalValue && <Line type="monotone" dataKey="value" stroke="#10b981" name="Total Value" strokeWidth={2} />}
-                {showCash && <Line type="monotone" dataKey="cash" stroke="#06b6d4" name="Cash" strokeWidth={2} />}
-                {showPositions && <Line type="monotone" dataKey="positions" stroke="#f59e0b" name="Holdings" strokeWidth={2} />}
+                {showTotalValue && <Line type="monotone" dataKey="value" stroke="#10b981" name="Total Value" strokeWidth={2} dot={false} />}
+                {showCash && <Line type="monotone" dataKey="cash" stroke="#06b6d4" name="Cash" strokeWidth={2} dot={false} />}
+                {showPositions && <Line type="monotone" dataKey="positions" stroke="#f59e0b" name="Holdings" strokeWidth={2} dot={false} />}
               </LineChart>
             </ResponsiveContainer>
             <div style={{ fontSize: '0.75rem', opacity: 0.6, marginTop: '0.5rem', textAlign: 'center' }}>
-              Showing {pointsToShow} of {totalPoints} data points
+              Showing {visiblePoints} of {totalPoints} data points ({chartZoom < 100 ? 'zoomed in' : chartZoom > 100 ? 'zoomed out' : 'normal view'})
             </div>
           </div>
         )}
