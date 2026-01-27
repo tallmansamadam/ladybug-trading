@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { TradingModeSelector } from './TradingModeSelector'
+import { ProfitBooking } from './ProfitBooking'
+import { EnhancedTradeAnalysis } from './EnhancedTradeAnalysis'
 
 const API_URL = 'http://localhost:8080'
 
@@ -381,44 +383,12 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Profit Booking Module - Always visible */}
+        <ProfitBooking positions={positions} onRefresh={fetchData} />
+
+        {/* Enhanced Trade Analysis */}
         {selectedView === 'trades' && (
-          <div style={cardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h2 style={{ margin: 0 }}>P&L by Symbol</h2>
-              <select
-                value={selectedSymbol}
-                onChange={(e) => setSelectedSymbol(e.target.value)}
-                style={{
-                  padding: '0.5rem',
-                  background: 'rgba(255,255,255,0.1)',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  borderRadius: '0.5rem',
-                  color: '#fff',
-                  cursor: 'pointer'
-                }}
-                className="symbol-dropdown"
-              >
-                {symbols.map(s => <option key={s} value={s} style={{ background: '#1e3a8a', color: '#fff' }}>{s}</option>)}
-              </select>
-            </div>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={symbolPerfData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                <XAxis dataKey="symbol" stroke="#fff" />
-                <YAxis stroke="#fff" />
-                <Tooltip
-                  contentStyle={{ background: 'rgba(0,0,0,0.8)', border: 'none', borderRadius: '0.5rem' }}
-                  labelStyle={{ color: '#fff' }}
-                />
-                <Legend />
-                <Bar dataKey="pnl" fill="#10b981" name="Total P&L">
-                  {symbolPerfData.map((entry, index) => (
-                    <Bar key={`cell-${index}`} dataKey="pnl" fill={entry.pnl >= 0 ? '#10b981' : '#ef4444'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          <EnhancedTradeAnalysis tradeHistory={tradeHistory} />
         )}
 
         {selectedView === 'positions' && (

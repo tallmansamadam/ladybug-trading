@@ -235,18 +235,53 @@ async fn main() -> Result<()> {
         .route("/trading-mode", get(get_trading_mode))
         .route("/trading-mode", post(set_trading_mode))
         .route("/test/generate", post(generate_test_data))
-        .route("/test/clear", post(clear_test_data))  // NEW
+        .route("/test/clear", post(clear_test_data))
+        .route("/book-profit/:symbol", post(book_profit_single))
+        .route("/book-all-profits", post(book_all_profits))
         .layer(tower_http::cors::CorsLayer::permissive())
-        .with_state(state);
+        .with_state(state.clone());
     
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     info!("API server listening on http://localhost:8080");
     info!("Dashboard available at http://localhost:3000");
     
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
     
+    // Graceful shutdown handler
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    
+    info!("🛑 Server shut down gracefully");
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!("🛑 Received Ctrl+C signal");
+        },
+        _ = terminate => {
+            info!("🛑 Received terminate signal");
+        },
+    }
 }
 
 async fn portfolio_tracking_loop(state: AppState) {
@@ -1135,4 +1170,101 @@ async fn set_trading_mode(
     info!("🎯 Trading mode changed to: {:?}", req.mode);
     
     StatusCode::OK
+}
+
+// Book profit for a single position
+async fn book_profit_single(
+    State(state): State<AppState>,
+    axum::extract::Path(symbol): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    info!("💰 Manual profit booking requested for {}", symbol);
+    
+    // Check if it's crypto or stock
+    let is_crypto = symbol.contains("/") || 
+                   (symbol.ends_with("USD") && 
+                    !symbol.starts_with("USD") &&
+                    symbol.len() > 3);
+    
+    let result = if is_crypto {
+        state.crypto.close_crypto_position(&symbol).await
+    } else {
+        state.alpaca.close_position(&symbol).await
+    };
+    
+    match result {
+        Ok(_) => {
+            state.logger.success(
+                "Manual Profit", 
+                &format!("💰 {} position closed by user", symbol)
+            );
+            info!("✅ Manual profit booked: {}", symbol);
+            Ok(Json(json!({
+                "success": true,
+                "symbol": symbol,
+                "message": "Position closed successfully"
+            })))
+        },
+        Err(e) => {
+            error!("❌ Failed to book profit for {}: {}", symbol, e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+// Book profits for ALL positions
+async fn book_all_profits(State(state): State<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
+    info!("💰💰💰 Manual profit booking requested for ALL positions");
+    
+    let mut closed_count = 0;
+    let mut failed_count = 0;
+    let mut closed_symbols = Vec::new();
+    
+    // Get all positions
+    match state.alpaca.get_positions().await {
+        Ok(positions) => {
+            for pos in positions {
+                let is_crypto = pos.symbol.contains("/") || 
+                               (pos.symbol.ends_with("USD") && 
+                                !pos.symbol.starts_with("USD") &&
+                                pos.symbol.len() > 3);
+                
+                let result = if is_crypto {
+                    state.crypto.close_crypto_position(&pos.symbol).await
+                } else {
+                    state.alpaca.close_position(&pos.symbol).await
+                };
+                
+                match result {
+                    Ok(_) => {
+                        closed_count += 1;
+                        closed_symbols.push(pos.symbol.clone());
+                        info!("✅ Closed {}", pos.symbol);
+                    },
+                    Err(e) => {
+                        failed_count += 1;
+                        error!("❌ Failed to close {}: {}", pos.symbol, e);
+                    }
+                }
+                
+                // Small delay between orders
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        },
+        Err(e) => {
+            error!("❌ Failed to get positions: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    
+    state.logger.success(
+        "Manual Profit", 
+        &format!("💰 Closed {} positions, {} failed", closed_count, failed_count)
+    );
+    
+    Ok(Json(json!({
+        "success": true,
+        "closed_count": closed_count,
+        "failed_count": failed_count,
+        "closed_symbols": closed_symbols
+    })))
 }
