@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { TradingModeSelector } from './TradingModeSelector'
 
 const API_URL = 'http://localhost:8080'
 
@@ -16,6 +17,9 @@ interface Position {
   entry_price: number
   current_price: number
   pnl: number
+  pnl_percent: number
+  market_value: number
+  asset_type: string
 }
 
 interface ActivityLog {
@@ -104,19 +108,39 @@ export default function Dashboard() {
     ? tradeHistory 
     : tradeHistory.filter(t => t.symbol === selectedSymbol)
 
-  const totalPnL = tradeHistory.reduce((sum, t) => sum + t.pnl, 0)
-  const winningTrades = tradeHistory.filter(t => t.pnl > 0).length
-  const totalTrades = tradeHistory.filter(t => t.action === 'SELL').length
-  const winRate = totalTrades > 0 ? ((winningTrades / totalTrades) * 100).toFixed(1) : '0'
+  // FIXED: Calculate P&L from current positions, not trade history
+  const unrealizedPnL = positions.reduce((sum, p) => sum + p.pnl, 0)
+  
+  // Realized P&L from closed trades only
+  const realizedPnL = tradeHistory
+    .filter(t => t.action === 'SELL')
+    .reduce((sum, t) => sum + t.pnl, 0)
+  
+  // Total P&L = unrealized + realized
+  const totalPnL = unrealizedPnL + realizedPnL
 
-  const currentValue = portfolioHistory.length > 0 
-    ? portfolioHistory[portfolioHistory.length - 1].total_value 
-    : 100000
+  // FIXED: Win rate only from CLOSED positions (SELL trades)
+  const closedTrades = tradeHistory.filter(t => t.action === 'SELL')
+  const winningTrades = closedTrades.filter(t => t.pnl > 0).length
+  const winRate = closedTrades.length > 0 
+    ? ((winningTrades / closedTrades.length) * 100).toFixed(1) 
+    : '0'
 
+  // FIXED: Portfolio value = cash + positions value
+  const latestSnapshot = portfolioHistory.length > 0 
+    ? portfolioHistory[portfolioHistory.length - 1]
+    : { total_value: 100000, cash: 100000, positions_value: 0 }
+  
+  const currentValue = latestSnapshot.total_value
+  const currentCash = latestSnapshot.cash
+  const currentPositionsValue = latestSnapshot.positions_value
+
+  // Starting value
   const startValue = portfolioHistory.length > 0 
     ? portfolioHistory[0].total_value 
     : 100000
 
+  // FIXED: Total return based on actual portfolio change
   const totalReturn = ((currentValue - startValue) / startValue * 100).toFixed(2)
 
   const chartData = portfolioHistory.map(p => ({
@@ -161,338 +185,335 @@ export default function Dashboard() {
           <p style={{ opacity: 0.9 }}>Real-time Portfolio Analytics</p>
         </header>
 
+        {/* ADDED: Trading Mode Selector */}
+        <TradingModeSelector onModeChange={(mode) => console.log('Mode changed to:', mode)} />
+
         <div style={{ 
           display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', 
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
           gap: '1rem', 
           marginBottom: '1.5rem' 
         }}>
-          <StatCard title="Portfolio Value" value={`$${currentValue.toFixed(2)}`} color="#10b981" />
-          <StatCard title="Total Return" value={`${totalReturn}%`} color={parseFloat(totalReturn) >= 0 ? '#10b981' : '#ef4444'} />
-          <StatCard title="Total P&L" value={`$${totalPnL.toFixed(2)}`} color={totalPnL >= 0 ? '#10b981' : '#ef4444'} />
-          <StatCard title="Win Rate" value={`${winRate}%`} color="#8b5cf6" />
-          <StatCard title="Active Positions" value={status?.active_positions.toString() || '0'} color="#06b6d4" />
-          <StatCard title="Status" value={connected ? '🟢 Live' : '🔴 Offline'} color={connected ? '#10b981' : '#ef4444'} />
+          <StatCard 
+            title="Portfolio Value" 
+            value={`$${currentValue.toFixed(2)}`} 
+            subtitle={`Cash: $${currentCash.toFixed(2)} | Holdings: $${currentPositionsValue.toFixed(2)}`}
+            color="#10b981" 
+          />
+          <StatCard 
+            title="Total Return" 
+            value={`${totalReturn}%`} 
+            subtitle={`From $${startValue.toFixed(2)}`}
+            color={parseFloat(totalReturn) >= 0 ? '#10b981' : '#ef4444'} 
+          />
+          <StatCard 
+            title="Total P&L" 
+            value={`$${totalPnL.toFixed(2)}`} 
+            subtitle={`Unrealized: $${unrealizedPnL.toFixed(2)} | Realized: $${realizedPnL.toFixed(2)}`}
+            color={totalPnL >= 0 ? '#10b981' : '#ef4444'} 
+          />
+          <StatCard 
+            title="Win Rate" 
+            value={`${winRate}%`} 
+            subtitle={`${winningTrades} wins / ${closedTrades.length} trades`}
+            color={parseFloat(winRate) >= 50 ? '#10b981' : '#ef4444'} 
+          />
+          <StatCard 
+            title="Active Positions" 
+            value={positions.length.toString()} 
+            subtitle={`Stocks: ${positions.filter(p => p.asset_type === 'stock').length} | Crypto: ${positions.filter(p => p.asset_type === 'crypto').length}`}
+            color="#06b6d4" 
+          />
+          <StatCard 
+            title="Status" 
+            value={connected ? '🟢 Live' : '🔴 Offline'} 
+            subtitle={status?.trading_enabled ? 'Trading Active' : 'Trading Paused'}
+            color={connected ? '#10b981' : '#ef4444'} 
+          />
         </div>
 
         <div style={{
-          background: 'rgba(255,255,255,0.1)',
-          backdropFilter: 'blur(10px)',
-          borderRadius: '1rem',
-          padding: '1rem',
-          marginBottom: '1.5rem',
           display: 'flex',
-          gap: '1rem',
-          alignItems: 'center',
-          justifyContent: 'space-between'
-        }}>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <Button onClick={() => toggleTrading(true)} disabled={status?.trading_enabled} color="#10b981">
-              Start Trading
-            </Button>
-            <Button onClick={() => toggleTrading(false)} disabled={!status?.trading_enabled} color="#ef4444">
-              Stop Trading
-            </Button>
-            <Button onClick={generateTestData} color="#8b5cf6">
-              🧪 Generate Test Data
-            </Button>
-          </div>
-          <div style={{ fontSize: '0.875rem', opacity: 0.9 }}>
-            {status?.trading_enabled ? '🟢 Trading Active' : '🟡 Trading Paused'}
-          </div>
-        </div>
-
-        <div style={{
-          background: 'rgba(255,255,255,0.1)',
-          backdropFilter: 'blur(10px)',
-          borderRadius: '1rem',
-          padding: '1rem',
+          gap: '0.5rem',
           marginBottom: '1.5rem',
-          display: 'flex',
-          gap: '0.5rem'
+          flexWrap: 'wrap'
         }}>
-          <ViewButton 
-            active={selectedView === 'portfolio'} 
-            onClick={() => setSelectedView('portfolio')}
+          <button
+            onClick={() => toggleTrading(!status?.trading_enabled)}
+            style={{
+              padding: '0.75rem 1.5rem',
+              background: status?.trading_enabled ? '#ef4444' : '#10b981',
+              border: 'none',
+              borderRadius: '0.5rem',
+              color: '#fff',
+              cursor: 'pointer',
+              fontWeight: 'bold'
+            }}
           >
-            📈 Portfolio History
-          </ViewButton>
-          <ViewButton 
-            active={selectedView === 'trades'} 
-            onClick={() => setSelectedView('trades')}
+            {status?.trading_enabled ? 'Stop Trading' : 'Start Trading'}
+          </button>
+          <button
+            onClick={generateTestData}
+            style={{
+              padding: '0.75rem 1.5rem',
+              background: '#8b5cf6',
+              border: 'none',
+              borderRadius: '0.5rem',
+              color: '#fff',
+              cursor: 'pointer',
+              fontWeight: 'bold'
+            }}
           >
-            💰 Trade Analysis
-          </ViewButton>
-          <ViewButton 
-            active={selectedView === 'positions'} 
-            onClick={() => setSelectedView('positions')}
-          >
-            📊 Position Breakdown
-          </ViewButton>
+            🧪 Generate Test Data
+          </button>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
+            <button onClick={() => setSelectedView('portfolio')} style={{
+              ...tabStyle,
+              background: selectedView === 'portfolio' ? '#7c3aed' : 'rgba(255,255,255,0.1)'
+            }}>
+              📊 Portfolio History
+            </button>
+            <button onClick={() => setSelectedView('trades')} style={{
+              ...tabStyle,
+              background: selectedView === 'trades' ? '#7c3aed' : 'rgba(255,255,255,0.1)'
+            }}>
+              📈 Trade Analysis
+            </button>
+            <button onClick={() => setSelectedView('positions')} style={{
+              ...tabStyle,
+              background: selectedView === 'positions' ? '#7c3aed' : 'rgba(255,255,255,0.1)'
+            }}>
+              📍 Position Breakdown
+            </button>
+          </div>
         </div>
 
-        <div style={{
-          background: 'rgba(255,255,255,0.1)',
-          backdropFilter: 'blur(10px)',
-          borderRadius: '1rem',
-          padding: '1.5rem',
-          marginBottom: '1.5rem'
-        }}>
-          {selectedView === 'portfolio' && (
-            <>
-              <h2 style={{ margin: '0 0 1rem 0' }}>Portfolio Value Over Time</h2>
-              {chartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={400}>
-                  <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                    <XAxis dataKey="time" stroke="#fff" />
-                    <YAxis stroke="#fff" />
-                    <Tooltip 
-                      contentStyle={{ background: 'rgba(0,0,0,0.8)', border: 'none', borderRadius: '0.5rem' }}
-                      labelStyle={{ color: '#fff' }}
-                    />
-                    <Legend />
-                    <Line type="monotone" dataKey="value" stroke="#10b981" strokeWidth={3} name="Total Value" />
-                    <Line type="monotone" dataKey="cash" stroke="#60a5fa" strokeWidth={2} name="Cash" />
-                    <Line type="monotone" dataKey="positions" stroke="#f59e0b" strokeWidth={2} name="Positions" />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : (
-                <EmptyChart />
-              )}
-            </>
-          )}
+        {selectedView === 'portfolio' && (
+          <div style={cardStyle}>
+            <h2 style={{ margin: '0 0 1rem 0' }}>Portfolio Value Over Time</h2>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                <XAxis dataKey="time" stroke="#fff" />
+                <YAxis stroke="#fff" />
+                <Tooltip 
+                  contentStyle={{ background: 'rgba(0,0,0,0.8)', border: 'none', borderRadius: '0.5rem' }}
+                  labelStyle={{ color: '#fff' }}
+                />
+                <Legend />
+                <Line type="monotone" dataKey="value" stroke="#10b981" name="Total Value" strokeWidth={2} />
+                <Line type="monotone" dataKey="cash" stroke="#06b6d4" name="Cash" strokeWidth={2} />
+                <Line type="monotone" dataKey="positions" stroke="#f59e0b" name="Positions" strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
 
-          {selectedView === 'trades' && (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                <h2 style={{ margin: 0 }}>Trade P&L Analysis</h2>
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  {symbols.map(symbol => (
-                    <SymbolButton
-                      key={symbol}
-                      active={selectedSymbol === symbol}
-                      onClick={() => setSelectedSymbol(symbol)}
-                    >
-                      {symbol}
-                    </SymbolButton>
-                  ))}
-                </div>
-              </div>
-              {tradePnLData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={400}>
-                  <BarChart data={tradePnLData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                    <XAxis dataKey="time" stroke="#fff" />
-                    <YAxis stroke="#fff" />
-                    <Tooltip 
-                      contentStyle={{ background: 'rgba(0,0,0,0.8)', border: 'none', borderRadius: '0.5rem' }}
-                      labelStyle={{ color: '#fff' }}
-                    />
-                    <Legend />
-                    <Bar dataKey="pnl" fill="#8b5cf6" name="Profit/Loss" />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <EmptyChart />
-              )}
-            </>
-          )}
-
-          {selectedView === 'positions' && (
-            <>
-              <h2 style={{ margin: '0 0 1rem 0' }}>Performance by Symbol</h2>
-              {symbolPerfData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={400}>
-                  <BarChart data={symbolPerfData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                    <XAxis dataKey="symbol" stroke="#fff" />
-                    <YAxis stroke="#fff" />
-                    <Tooltip 
-                      contentStyle={{ background: 'rgba(0,0,0,0.8)', border: 'none', borderRadius: '0.5rem' }}
-                      labelStyle={{ color: '#fff' }}
-                    />
-                    <Legend />
-                    <Bar dataKey="pnl" name="Total P&L" fill="#8884d8">
-                      {symbolPerfData.map((entry, index) => (
-                        <Bar key={`cell-${index}`} dataKey="pnl" fill={entry.pnl >= 0 ? '#10b981' : '#ef4444'} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <EmptyChart />
-              )}
-            </>
-          )}
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-          
-          <Panel title="💼 Active Positions">
-            {positions.length === 0 ? (
-              <EmptyState>No active positions</EmptyState>
-            ) : (
-              positions.map((pos, i) => (
-                <div key={i} style={{
-                  padding: '1rem',
-                  background: 'rgba(0,0,0,0.2)',
+        {selectedView === 'trades' && (
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h2 style={{ margin: 0 }}>P&L by Symbol</h2>
+              <select
+                value={selectedSymbol}
+                onChange={(e) => setSelectedSymbol(e.target.value)}
+                style={{
+                  padding: '0.5rem',
+                  background: 'rgba(255,255,255,0.1)',
+                  border: '1px solid rgba(255,255,255,0.2)',
                   borderRadius: '0.5rem',
-                  marginBottom: '0.75rem',
-                  borderLeft: `4px solid ${pos.pnl >= 0 ? '#10b981' : '#ef4444'}`
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <div style={{ fontWeight: 'bold', fontSize: '1.25rem' }}>{pos.symbol}</div>
-                    <div style={{ fontSize: '1.125rem' }}>${pos.current_price.toFixed(2)}</div>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem', opacity: 0.8, marginTop: '0.5rem' }}>
-                    <span>{pos.quantity} @ ${pos.entry_price.toFixed(2)}</span>
-                    <span style={{ fontWeight: 'bold', color: pos.pnl >= 0 ? '#10b981' : '#ef4444' }}>
-                      {pos.pnl >= 0 ? '+' : ''}${pos.pnl.toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </Panel>
-
-          <Panel title="📜 Recent Activity">
-            <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-              {logs.length === 0 ? (
-                <EmptyState>No activity yet</EmptyState>
-              ) : (
-                logs.slice(0, 10).map(log => (
-                  <div key={log.id} style={{
-                    padding: '0.75rem',
-                    background: 'rgba(0,0,0,0.2)',
-                    borderRadius: '0.5rem',
-                    marginBottom: '0.5rem',
-                    fontSize: '0.875rem'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                      <span style={{ fontWeight: 'bold' }}>{log.symbol || log.category}</span>
-                      <span style={{ opacity: 0.6 }}>{new Date(log.timestamp).toLocaleTimeString()}</span>
-                    </div>
-                    <div>{log.message}</div>
-                  </div>
-                ))
-              )}
+                  color: '#fff'
+                }}
+              >
+                {symbols.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
             </div>
-          </Panel>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={symbolPerfData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                <XAxis dataKey="symbol" stroke="#fff" />
+                <YAxis stroke="#fff" />
+                <Tooltip
+                  contentStyle={{ background: 'rgba(0,0,0,0.8)', border: 'none', borderRadius: '0.5rem' }}
+                  labelStyle={{ color: '#fff' }}
+                />
+                <Legend />
+                <Bar dataKey="pnl" fill="#10b981" name="Total P&L">
+                  {symbolPerfData.map((entry, index) => (
+                    <Bar key={`cell-${index}`} dataKey="pnl" fill={entry.pnl >= 0 ? '#10b981' : '#ef4444'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {selectedView === 'positions' && (
+          <div style={cardStyle}>
+            <h2 style={{ margin: '0 0 1rem 0' }}>🔥 Active Positions ({positions.length} total)</h2>
+            
+            {/* Stock Positions */}
+            <h3 style={{ marginTop: '1rem', color: '#10b981' }}>📊 Stocks ({positions.filter(p => p.asset_type === 'stock').length})</h3>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid rgba(255,255,255,0.2)' }}>
+                    <th style={tableHeaderStyle}>Symbol</th>
+                    <th style={tableHeaderStyle}>Quantity</th>
+                    <th style={tableHeaderStyle}>Entry Price</th>
+                    <th style={tableHeaderStyle}>Current Price</th>
+                    <th style={tableHeaderStyle}>Market Value</th>
+                    <th style={tableHeaderStyle}>P&L</th>
+                    <th style={tableHeaderStyle}>P&L %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {positions.filter(p => p.asset_type === 'stock').map((pos, idx) => (
+                    <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                      <td style={tableCellStyle}><strong>{pos.symbol}</strong></td>
+                      <td style={tableCellStyle}>{pos.quantity.toFixed(2)}</td>
+                      <td style={tableCellStyle}>${pos.entry_price.toFixed(2)}</td>
+                      <td style={tableCellStyle}>${pos.current_price.toFixed(2)}</td>
+                      <td style={tableCellStyle}>${pos.market_value.toFixed(2)}</td>
+                      <td style={{ ...tableCellStyle, color: pos.pnl >= 0 ? '#10b981' : '#ef4444', fontWeight: 'bold' }}>
+                        ${pos.pnl.toFixed(2)}
+                      </td>
+                      <td style={{ ...tableCellStyle, color: pos.pnl_percent >= 0 ? '#10b981' : '#ef4444' }}>
+                        {pos.pnl_percent.toFixed(2)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Crypto Positions */}
+            <h3 style={{ marginTop: '2rem', color: '#f59e0b' }}>₿ Crypto ({positions.filter(p => p.asset_type === 'crypto').length})</h3>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid rgba(255,255,255,0.2)' }}>
+                    <th style={tableHeaderStyle}>Symbol</th>
+                    <th style={tableHeaderStyle}>Quantity</th>
+                    <th style={tableHeaderStyle}>Entry Price</th>
+                    <th style={tableHeaderStyle}>Current Price</th>
+                    <th style={tableHeaderStyle}>Market Value</th>
+                    <th style={tableHeaderStyle}>P&L</th>
+                    <th style={tableHeaderStyle}>P&L %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {positions.filter(p => p.asset_type === 'crypto').map((pos, idx) => (
+                    <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                      <td style={tableCellStyle}><strong>{pos.symbol}</strong></td>
+                      <td style={tableCellStyle}>{pos.quantity.toFixed(6)}</td>
+                      <td style={tableCellStyle}>${pos.entry_price.toFixed(2)}</td>
+                      <td style={tableCellStyle}>${pos.current_price.toFixed(2)}</td>
+                      <td style={tableCellStyle}>${pos.market_value.toFixed(2)}</td>
+                      <td style={{ ...tableCellStyle, color: pos.pnl >= 0 ? '#10b981' : '#ef4444', fontWeight: 'bold' }}>
+                        ${pos.pnl.toFixed(2)}
+                      </td>
+                      <td style={{ ...tableCellStyle, color: pos.pnl_percent >= 0 ? '#10b981' : '#ef4444' }}>
+                        {pos.pnl_percent.toFixed(2)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {positions.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '2rem', opacity: 0.6 }}>
+                No active positions. Click "Generate Test Data" to create sample positions.
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={cardStyle}>
+          <h2 style={{ margin: '0 0 1rem 0' }}>📋 Recent Activity</h2>
+          <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+            {logs.slice(-20).reverse().map((log) => (
+              <div
+                key={log.id}
+                style={{
+                  padding: '0.75rem',
+                  marginBottom: '0.5rem',
+                  background: 'rgba(255,255,255,0.05)',
+                  borderRadius: '0.5rem',
+                  borderLeft: `3px solid ${logColor(log.level)}`
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.875rem', marginBottom: '0.25rem' }}>
+                  <span style={{ opacity: 0.7 }}>
+                    {new Date(log.timestamp).toLocaleTimeString()}
+                  </span>
+                  <span style={{ fontWeight: 'bold', color: logColor(log.level) }}>
+                    {log.category}
+                  </span>
+                </div>
+                <div>{log.message}</div>
+                {log.symbol && <div style={{ fontSize: '0.875rem', opacity: 0.7, marginTop: '0.25rem' }}>Symbol: {log.symbol}</div>}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
   )
 }
 
-function StatCard({ title, value, color }: any) {
-  return (
-    <div style={{
-      background: 'rgba(255,255,255,0.1)',
-      backdropFilter: 'blur(10px)',
-      borderRadius: '0.75rem',
-      padding: '1rem',
-      borderLeft: `4px solid ${color}`
-    }}>
-      <div style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: '0.25rem' }}>{title}</div>
-      <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{value}</div>
-    </div>
-  )
-}
-
-function Button({ onClick, disabled, color, children }: any) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        background: disabled ? '#6b7280' : color,
-        border: 'none',
-        padding: '0.75rem 1.5rem',
-        borderRadius: '0.5rem',
-        color: 'white',
-        fontWeight: 'bold',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.5 : 1
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-function ViewButton({ active, onClick, children }: any) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        background: active ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.1)',
-        border: 'none',
-        padding: '0.75rem 1.5rem',
-        borderRadius: '0.5rem',
-        color: 'white',
-        fontWeight: 'bold',
-        cursor: 'pointer',
-        transition: 'all 0.2s'
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-function SymbolButton({ active, onClick, children }: any) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        background: active ? '#8b5cf6' : 'rgba(255,255,255,0.1)',
-        border: 'none',
-        padding: '0.5rem 1rem',
-        borderRadius: '0.375rem',
-        color: 'white',
-        fontSize: '0.875rem',
-        fontWeight: 'bold',
-        cursor: 'pointer'
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-function Panel({ title, children }: any) {
+function StatCard({ title, value, subtitle, color }: { title: string; value: string; subtitle?: string; color: string }) {
   return (
     <div style={{
       background: 'rgba(255,255,255,0.1)',
       backdropFilter: 'blur(10px)',
       borderRadius: '1rem',
-      padding: '1.5rem'
+      padding: '1.25rem',
+      border: '1px solid rgba(255,255,255,0.2)'
     }}>
-      <h2 style={{ margin: '0 0 1rem 0', fontSize: '1.25rem' }}>{title}</h2>
-      {children}
+      <div style={{ fontSize: '0.875rem', opacity: 0.8, marginBottom: '0.5rem' }}>{title}</div>
+      <div style={{ fontSize: '1.75rem', fontWeight: 'bold', color }}>{value}</div>
+      {subtitle && <div style={{ fontSize: '0.75rem', opacity: 0.6, marginTop: '0.5rem' }}>{subtitle}</div>}
     </div>
   )
 }
 
-function EmptyState({ children }: any) {
-  return (
-    <div style={{ textAlign: 'center', padding: '3rem', opacity: 0.6 }}>
-      {children}
-    </div>
-  )
+const cardStyle = {
+  background: 'rgba(255,255,255,0.1)',
+  backdropFilter: 'blur(10px)',
+  borderRadius: '1rem',
+  padding: '1.5rem',
+  marginBottom: '1.5rem',
+  border: '1px solid rgba(255,255,255,0.2)'
 }
 
-function EmptyChart() {
-  return (
-    <div style={{ 
-      height: '400px', 
-      display: 'flex', 
-      alignItems: 'center', 
-      justifyContent: 'center',
-      opacity: 0.6 
-    }}>
-      No data available. Click "Generate Test Data" to see charts.
-    </div>
-  )
+const tabStyle = {
+  padding: '0.75rem 1.5rem',
+  border: 'none',
+  borderRadius: '0.5rem',
+  color: '#fff',
+  cursor: 'pointer',
+  fontWeight: 'bold',
+  transition: 'all 0.2s'
+}
+
+const tableHeaderStyle = {
+  padding: '0.75rem',
+  textAlign: 'left' as const,
+  fontWeight: 'bold',
+  opacity: 0.8
+}
+
+const tableCellStyle = {
+  padding: '0.75rem',
+  textAlign: 'left' as const
+}
+
+function logColor(level: string) {
+  switch (level) {
+    case 'success': return '#10b981'
+    case 'error': return '#ef4444'
+    case 'warning': return '#f59e0b'
+    default: return '#06b6d4'
+  }
 }
