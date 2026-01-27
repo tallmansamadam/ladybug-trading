@@ -16,11 +16,13 @@ use std::env;
 use chrono::Utc;
 
 mod alpaca;
+mod crypto;
 mod news;
 mod technical;
 mod activity;
 
 use alpaca::{AlpacaClient, OrderRequest};
+use crypto::{CryptoClient, CryptoOrderRequest};
 use news::NewsAggregator;
 use technical::TechnicalAnalysis;
 use activity::{ActivityLogger, LogLevel};
@@ -28,8 +30,10 @@ use activity::{ActivityLogger, LogLevel};
 #[derive(Clone)]
 struct AppState {
     alpaca: Arc<AlpacaClient>,
+    crypto: Arc<CryptoClient>,
     news: Arc<NewsAggregator>,
     trading_enabled: Arc<RwLock<bool>>,
+    crypto_trading_enabled: Arc<RwLock<bool>>,
     logger: Arc<ActivityLogger>,
     portfolio_history: Arc<RwLock<Vec<PortfolioSnapshot>>>,
     trade_history: Arc<RwLock<Vec<TradeRecord>>>,
@@ -87,7 +91,8 @@ async fn main() -> Result<()> {
         info!("✓ Alpaca credentials loaded");
     }
     
-    let alpaca = Arc::new(AlpacaClient::new(api_key, api_secret, true));
+    let alpaca = Arc::new(AlpacaClient::new(api_key.clone(), api_secret.clone(), true));
+    let crypto = Arc::new(CryptoClient::new(api_key, api_secret, true));
     let news = Arc::new(NewsAggregator::new());
     let logger = Arc::new(ActivityLogger::new());
     
@@ -103,8 +108,10 @@ async fn main() -> Result<()> {
     
     let state = AppState {
         alpaca: alpaca.clone(),
+        crypto: crypto.clone(),
         news: news.clone(),
         trading_enabled: Arc::new(RwLock::new(false)),
+        crypto_trading_enabled: Arc::new(RwLock::new(false)),
         logger: logger.clone(),
         portfolio_history: Arc::new(RwLock::new(vec![initial_snapshot])),
         trade_history: Arc::new(RwLock::new(vec![])),
@@ -127,6 +134,15 @@ async fn main() -> Result<()> {
         }
     });
     
+    // Start crypto trading engine
+    let state_clone = state.clone();
+    let has_creds = has_credentials;
+    tokio::spawn(async move {
+        if has_creds {
+            crypto_trading_loop(state_clone).await;
+        }
+    });
+    
     // Portfolio tracking loop
     let state_clone = state.clone();
     tokio::spawn(async move {
@@ -138,7 +154,9 @@ async fn main() -> Result<()> {
         .route("/health", get(health))
         .route("/status", get(status))
         .route("/positions", get(get_positions))
+        .route("/positions/crypto", get(get_crypto_positions))
         .route("/toggle", post(toggle_trading))
+        .route("/toggle/crypto", post(toggle_crypto_trading))
         .route("/account", get(get_account))
         .route("/logs", get(get_logs))
         .route("/portfolio/history", get(get_portfolio_history))
