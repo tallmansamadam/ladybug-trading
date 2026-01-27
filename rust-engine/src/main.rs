@@ -37,6 +37,7 @@ struct AppState {
     logger: Arc<ActivityLogger>,
     portfolio_history: Arc<RwLock<Vec<PortfolioSnapshot>>>,
     trade_history: Arc<RwLock<Vec<TradeRecord>>>,
+    test_positions: Arc<RwLock<Vec<Position>>>,  // NEW: Test positions
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -46,6 +47,9 @@ struct Position {
     entry_price: f64,
     current_price: f64,
     pnl: f64,
+    pnl_percent: f64,
+    market_value: f64,
+    asset_type: String,  // "stock" or "crypto"
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -115,6 +119,7 @@ async fn main() -> Result<()> {
         logger: logger.clone(),
         portfolio_history: Arc::new(RwLock::new(vec![initial_snapshot])),
         trade_history: Arc::new(RwLock::new(vec![])),
+        test_positions: Arc::new(RwLock::new(vec![])),  // NEW
     };
     
     // Start news aggregator
@@ -162,6 +167,7 @@ async fn main() -> Result<()> {
         .route("/portfolio/history", get(get_portfolio_history))
         .route("/trades/history", get(get_trade_history))
         .route("/test/generate", post(generate_test_data))
+        .route("/test/clear", post(clear_test_data))  // NEW
         .layer(tower_http::cors::CorsLayer::permissive())
         .with_state(state);
     
@@ -632,19 +638,41 @@ async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
 }
 
 async fn get_positions(State(state): State<AppState>) -> Json<Vec<Position>> {
+    let mut all_positions = Vec::new();
+    
+    // Get real positions from Alpaca
     match state.alpaca.get_positions().await {
         Ok(positions) => {
-            let mapped: Vec<Position> = positions.iter().map(|p| Position {
-                symbol: p.symbol.clone(),
-                quantity: p.qty.parse().unwrap_or(0.0),
-                entry_price: p.avg_entry_price.parse().unwrap_or(0.0),
-                current_price: p.current_price.parse().unwrap_or(0.0),
-                pnl: p.unrealized_pl.parse().unwrap_or(0.0),
+            let real_positions: Vec<Position> = positions.iter().map(|p| {
+                let qty = p.qty.parse().unwrap_or(0.0);
+                let entry = p.avg_entry_price.parse().unwrap_or(0.0);
+                let current = p.current_price.parse().unwrap_or(0.0);
+                let pnl = p.unrealized_pl.parse().unwrap_or(0.0);
+                let market_value = qty * current;
+                let pnl_percent = if entry > 0.0 { ((current - entry) / entry) * 100.0 } else { 0.0 };
+                let asset_type = if p.symbol.contains("/") { "crypto" } else { "stock" };
+                
+                Position {
+                    symbol: p.symbol.clone(),
+                    quantity: qty,
+                    entry_price: entry,
+                    current_price: current,
+                    pnl,
+                    pnl_percent,
+                    market_value,
+                    asset_type: asset_type.to_string(),
+                }
             }).collect();
-            Json(mapped)
+            all_positions.extend(real_positions);
         },
-        Err(_) => Json(vec![]),
+        Err(_) => {}
     }
+    
+    // Add test positions
+    let test_positions = state.test_positions.read().await;
+    all_positions.extend(test_positions.clone());
+    
+    Json(all_positions)
 }
 
 async fn get_account(State(state): State<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -711,12 +739,24 @@ async fn get_crypto_positions(State(state): State<AppState>) -> Json<Vec<Positio
         Ok(positions) => {
             let crypto_positions: Vec<Position> = positions.iter()
                 .filter(|p| p.symbol.contains("/"))
-                .map(|p| Position {
-                    symbol: p.symbol.clone(),
-                    quantity: p.qty.parse().unwrap_or(0.0),
-                    entry_price: p.avg_entry_price.parse().unwrap_or(0.0),
-                    current_price: p.current_price.parse().unwrap_or(0.0),
-                    pnl: p.unrealized_pl.parse().unwrap_or(0.0),
+                .map(|p| {
+                    let qty = p.qty.parse().unwrap_or(0.0);
+                    let entry = p.avg_entry_price.parse().unwrap_or(0.0);
+                    let current = p.current_price.parse().unwrap_or(0.0);
+                    let pnl = p.unrealized_pl.parse().unwrap_or(0.0);
+                    let market_value = qty * current;
+                    let pnl_percent = if entry > 0.0 { ((current - entry) / entry) * 100.0 } else { 0.0 };
+                    
+                    Position {
+                        symbol: p.symbol.clone(),
+                        quantity: qty,
+                        entry_price: entry,
+                        current_price: current,
+                        pnl,
+                        pnl_percent,
+                        market_value,
+                        asset_type: "crypto".to_string(),
+                    }
                 }).collect();
             Json(crypto_positions)
         },
@@ -725,19 +765,104 @@ async fn get_crypto_positions(State(state): State<AppState>) -> Json<Vec<Positio
 }
 
 async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
-    state.logger.info("Test", "🧪 Generating test data...");
+    state.logger.info("Test", "🧪 Generating test data with stocks and crypto...");
+    
+    // Generate test positions (stocks + crypto)
+    let mut test_positions = state.test_positions.write().await;
+    test_positions.clear();
+    
+    // Stock positions
+    test_positions.push(Position {
+        symbol: "AAPL".to_string(),
+        quantity: 15.0,
+        entry_price: 175.50,
+        current_price: 178.45,
+        pnl: 44.25,
+        pnl_percent: 1.68,
+        market_value: 2676.75,
+        asset_type: "stock".to_string(),
+    });
+    
+    test_positions.push(Position {
+        symbol: "GOOGL".to_string(),
+        quantity: 8.0,
+        entry_price: 142.30,
+        current_price: 145.80,
+        pnl: 28.00,
+        pnl_percent: 2.46,
+        market_value: 1166.40,
+        asset_type: "stock".to_string(),
+    });
+    
+    test_positions.push(Position {
+        symbol: "NVDA".to_string(),
+        quantity: 20.0,
+        entry_price: 495.20,
+        current_price: 512.35,
+        pnl: 343.00,
+        pnl_percent: 3.46,
+        market_value: 10247.00,
+        asset_type: "stock".to_string(),
+    });
+    
+    test_positions.push(Position {
+        symbol: "TSLA".to_string(),
+        quantity: 12.0,
+        entry_price: 238.75,
+        current_price: 232.10,
+        pnl: -79.80,
+        pnl_percent: -2.79,
+        market_value: 2785.20,
+        asset_type: "stock".to_string(),
+    });
+    
+    // Crypto positions
+    test_positions.push(Position {
+        symbol: "BTC/USD".to_string(),
+        quantity: 0.125,
+        entry_price: 92500.00,
+        current_price: 94567.23,
+        pnl: 258.40,
+        pnl_percent: 2.23,
+        market_value: 11820.90,
+        asset_type: "crypto".to_string(),
+    });
+    
+    test_positions.push(Position {
+        symbol: "ETH/USD".to_string(),
+        quantity: 3.5,
+        entry_price: 3420.50,
+        current_price: 3512.75,
+        pnl: 322.88,
+        pnl_percent: 2.70,
+        market_value: 12294.63,
+        asset_type: "crypto".to_string(),
+    });
+    
+    test_positions.push(Position {
+        symbol: "XRP/USD".to_string(),
+        quantity: 1500.0,
+        entry_price: 0.62,
+        current_price: 0.58,
+        pnl: -60.00,
+        pnl_percent: -6.45,
+        market_value: 870.00,
+        asset_type: "crypto".to_string(),
+    });
+    
+    drop(test_positions);
     
     // Generate portfolio snapshots
     let base_time = Utc::now();
     let mut portfolio_history = state.portfolio_history.write().await;
     portfolio_history.clear();
     
-    for i in 0..20 {
-        let value = 100000.0 + (i as f64 * 500.0) - (i as f64 % 3 as f64 * 200.0);
-        let positions_val = (i as f64 * 300.0).min(20000.0);
+    for i in 0..30 {
+        let value = 100000.0 + (i as f64 * 650.0) - (i as f64 % 4 as f64 * 300.0);
+        let positions_val = (i as f64 * 450.0).min(35000.0);
         
         portfolio_history.push(PortfolioSnapshot {
-            timestamp: (base_time - chrono::Duration::minutes(20 - i)).to_rfc3339(),
+            timestamp: (base_time - chrono::Duration::minutes(30 - i)).to_rfc3339(),
             total_value: value,
             cash: value - positions_val,
             positions_value: positions_val,
@@ -745,15 +870,17 @@ async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
     }
     drop(portfolio_history);
     
-    // Generate trade history
+    // Generate trade history (stocks + crypto)
     let test_trades = vec![
-        ("AAPL", "BUY", 10.0, 175.50, 0.0),
-        ("GOOGL", "BUY", 7.0, 142.30, 0.0),
-        ("AAPL", "SELL", 10.0, 178.25, 27.50),
-        ("TSLA", "BUY", 5.0, 238.75, 0.0),
-        ("GOOGL", "SELL", 7.0, 145.80, 24.50),
-        ("MSFT", "BUY", 12.0, 425.80, 0.0),
-        ("TSLA", "SELL", 5.0, 245.20, 32.25),
+        ("AAPL", "BUY", 15.0, 175.50, 0.0),
+        ("GOOGL", "BUY", 8.0, 142.30, 0.0),
+        ("BTC/USD", "BUY", 0.125, 92500.00, 0.0),
+        ("NVDA", "BUY", 20.0, 495.20, 0.0),
+        ("ETH/USD", "BUY", 3.5, 3420.50, 0.0),
+        ("TSLA", "BUY", 12.0, 238.75, 0.0),
+        ("XRP/USD", "BUY", 1500.0, 0.62, 0.0),
+        ("AAPL", "SELL", 5.0, 178.25, 13.75),
+        ("BTC/USD", "PARTIAL_SELL", 0.025, 94000.00, 37.50),
     ];
     
     let mut trade_history = state.trade_history.write().await;
@@ -762,7 +889,7 @@ async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
     for (i, (symbol, action, qty, price, pnl)) in test_trades.iter().enumerate() {
         trade_history.push(TradeRecord {
             id: uuid::Uuid::new_v4().to_string(),
-            timestamp: (base_time - chrono::Duration::minutes(20 - i as i64)).to_rfc3339(),
+            timestamp: (base_time - chrono::Duration::minutes(30 - i as i64 * 3)).to_rfc3339(),
             symbol: symbol.to_string(),
             action: action.to_string(),
             quantity: *qty,
@@ -772,26 +899,61 @@ async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
         
         state.logger.trade(
             if *pnl > 0.0 { LogLevel::Success } else { LogLevel::Info },
-            &format!("{} {} shares at ${:.2} | P&L: ${:.2}", action, qty, price, pnl),
+            &format!("{} {} units at ${:.2} | P&L: ${:.2}", action, qty, price, pnl),
             symbol
         );
     }
     drop(trade_history);
     
-    // Generate analysis logs
-    let symbols = vec!["AAPL", "GOOGL", "TSLA", "MSFT", "AMZN"];
-    for (symbol, price, signal, sentiment) in symbols.iter().zip([175.5, 142.3, 238.7, 425.8, 178.2])
-        .zip([0.75, 0.65, 0.82, -0.55, 0.48])
-        .zip([0.35, 0.20, 0.45, -0.15, 0.10])
-        .map(|(((s, p), sig), sent)| (s, p, sig, sent))
-    {
+    // Generate analysis logs (stocks + crypto)
+    let analysis_data = vec![
+        ("AAPL", 178.45, 0.75, 0.35, "stock"),
+        ("GOOGL", 145.80, 0.65, 0.20, "stock"),
+        ("NVDA", 512.35, 0.82, 0.45, "stock"),
+        ("TSLA", 232.10, -0.55, -0.15, "stock"),
+        ("BTC/USD", 94567.23, 0.68, 0.25, "crypto"),
+        ("ETH/USD", 3512.75, 0.72, 0.30, "crypto"),
+        ("XRP/USD", 0.58, -0.45, -0.10, "crypto"),
+    ];
+    
+    for (symbol, price, signal, sentiment, asset_type) in analysis_data {
+        let emoji = if asset_type == "crypto" { "₿" } else { "📈" };
         state.logger.analysis(
-            &format!("Price: ${:.2} | Signal: {:.2} | Sentiment: {:.2}", price, signal, sentiment),
+            &format!("{} Price: ${:.2} | Signal: {:.2} | Sentiment: {:.2}", emoji, price, signal, sentiment),
             symbol
         );
     }
     
-    state.logger.success("Test", "✓ Test data generated successfully");
+    state.logger.success("Test", "✓ Test data generated: 7 positions (4 stocks + 3 crypto), 30 portfolio snapshots, 9 trades");
+    
+    StatusCode::OK
+}
+
+async fn clear_test_data(State(state): State<AppState>) -> StatusCode {
+    state.logger.info("Test", "🧹 Clearing test data...");
+    
+    // Clear test positions
+    let mut test_positions = state.test_positions.write().await;
+    test_positions.clear();
+    drop(test_positions);
+    
+    // Clear portfolio history (reset to initial)
+    let mut portfolio_history = state.portfolio_history.write().await;
+    portfolio_history.clear();
+    portfolio_history.push(PortfolioSnapshot {
+        timestamp: Utc::now().to_rfc3339(),
+        total_value: 100000.0,
+        cash: 100000.0,
+        positions_value: 0.0,
+    });
+    drop(portfolio_history);
+    
+    // Clear trade history
+    let mut trade_history = state.trade_history.write().await;
+    trade_history.clear();
+    drop(trade_history);
+    
+    state.logger.success("Test", "✓ Test data cleared successfully");
     
     StatusCode::OK
 }
