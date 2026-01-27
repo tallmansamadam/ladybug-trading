@@ -170,7 +170,8 @@ impl AlpacaClient {
     }
 
     pub async fn get_latest_quote(&self, symbol: &str) -> Result<f64> {
-        let url = format!("{}/stocks/{}/quotes/latest", self.data_url, symbol);
+        // CRITICAL: Use latest TRADE price, not ask/bid which can be fake
+        let url = format!("{}/stocks/{}/trades/latest", self.data_url, symbol);
         
         let response = self.client
             .get(&url)
@@ -179,33 +180,37 @@ impl AlpacaClient {
             .query(&[("feed", "iex")])
             .send()
             .await
-            .context(format!("Failed to fetch quote for {}", symbol))?;
+            .context(format!("Failed to fetch latest trade for {}", symbol))?;
 
         if !response.status().is_success() {
-            anyhow::bail!("Failed to get latest quote");
+            tracing::warn!("Failed to get latest trade for {}, falling back to bars", symbol);
+            // Fallback to latest bar close price
+            let bars = self.get_bars(symbol, "1Min", 1).await?;
+            if let Some(bar) = bars.first() {
+                return Ok(bar.c);
+            }
+            anyhow::bail!("No price data available for {}", symbol);
         }
 
         let text = response.text().await?;
         let value: serde_json::Value = serde_json::from_str(&text)?;
         
-        if let Some(ask) = value["quote"]["ap"].as_f64() {
-            if ask > 0.0 {
-                return Ok(ask);
+        // Get actual trade price (not ask/bid which can be manipulated)
+        if let Some(price) = value["trade"]["p"].as_f64() {
+            if price > 0.0 {
+                tracing::info!("✅ {} REAL TRADE PRICE: ${:.2}", symbol, price);
+                return Ok(price);
             }
         }
         
-        if let Some(bid) = value["quote"]["bp"].as_f64() {
-            if bid > 0.0 {
-                return Ok(bid);
-            }
-        }
-        
+        // Fallback to latest bar
+        tracing::warn!("No trade price for {}, using latest bar", symbol);
         let bars = self.get_bars(symbol, "1Min", 1).await?;
         if let Some(bar) = bars.first() {
             return Ok(bar.c);
         }
         
-        anyhow::bail!("No price data available")
+        anyhow::bail!("No price data available for {}", symbol)
     }
 
     pub async fn close_position(&self, symbol: &str) -> Result<()> {
