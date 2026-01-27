@@ -285,7 +285,8 @@ async fn shutdown_signal() {
 }
 
 async fn portfolio_tracking_loop(state: AppState) {
-    let mut tick = interval(Duration::from_secs(30));
+    // MAXIMUM SPEED: Update portfolio every 10 seconds (was 30s)
+    let mut tick = interval(Duration::from_secs(10));
     
     loop {
         tick.tick().await;
@@ -348,7 +349,9 @@ async fn demo_loop(state: AppState) {
 }
 
 async fn trading_loop(state: AppState) {
-    let mut tick = interval(Duration::from_secs(90));
+    // MAXIMUM SPEED: Alpaca allows 200 requests/minute = 300ms minimum
+    // Stock cycle: 30 seconds (was 90s) for aggressive trading
+    let mut tick = interval(Duration::from_secs(30));
     
     loop {
         tick.tick().await;
@@ -602,7 +605,8 @@ async fn process_stock(state: &AppState, symbol: &str) -> Result<String> {
 }
 
 async fn crypto_trading_loop(state: AppState) {
-    let mut tick = interval(Duration::from_secs(120));
+    // MAXIMUM SPEED: Crypto trades faster - 60 seconds (was 120s)
+    let mut tick = interval(Duration::from_secs(60));
     
     loop {
         tick.tick().await;

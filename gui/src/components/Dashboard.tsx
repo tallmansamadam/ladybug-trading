@@ -68,7 +68,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchData()
-    const interval = setInterval(fetchData, 3000)
+    // MAXIMUM SPEED: Poll every 1 second (was 3s) for real-time updates
+    const interval = setInterval(fetchData, 1000)
     return () => clearInterval(interval)
   }, [])
 

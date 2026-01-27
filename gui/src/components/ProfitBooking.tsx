@@ -29,9 +29,18 @@ export function ProfitBooking({ positions, onRefresh }: ProfitBookingProps) {
     
     setBooking(symbol)
     try {
-      await axios.post(`${API_URL}/book-profit/${symbol}`)
-      alert(`✅ Profit booked for ${symbol}!`)
+      const response = await axios.post(`${API_URL}/book-profit/${symbol}`)
+      const pnl = response.data.pnl || 0
+      
+      // Immediate refresh
       onRefresh()
+      
+      // Wait 500ms for backend to update, then refresh again
+      setTimeout(() => {
+        onRefresh()
+      }, 500)
+      
+      alert(`✅ Profit booked for ${symbol}!\nP&L: $${pnl.toFixed(2)}`)
     } catch (err) {
       alert(`❌ Failed to book profit for ${symbol}`)
     } finally {
@@ -47,8 +56,17 @@ export function ProfitBooking({ positions, onRefresh }: ProfitBookingProps) {
     try {
       const response = await axios.post(`${API_URL}/book-all-profits`)
       const data = response.data
-      alert(`✅ Closed ${data.closed_count} positions!\n${data.failed_count > 0 ? `⚠️ ${data.failed_count} failed` : ''}`)
+      
+      // Immediate refresh
       onRefresh()
+      
+      // Wait 1s for all positions to close, then refresh again
+      setTimeout(() => {
+        onRefresh()
+      }, 1000)
+      
+      const message = `✅ Closed ${data.closed_count} positions!\nTotal P&L: $${data.total_pnl?.toFixed(2) || '0.00'}${data.failed_count > 0 ? `\n⚠️ ${data.failed_count} failed` : ''}`
+      alert(message)
     } catch (err) {
       alert('❌ Failed to book profits')
     } finally {

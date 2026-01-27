@@ -17,7 +17,7 @@ if ($processes) {
                 Write-Host "Process still running, forcing termination..." -ForegroundColor Yellow
                 Stop-Process -Id $proc.Id -Force
             } else {
-                Write-Host "Process terminated gracefully ✓" -ForegroundColor Green
+                Write-Host "Process terminated gracefully" -ForegroundColor Green
             }
         } catch {
             Write-Host "Forcing termination..." -ForegroundColor Yellow
