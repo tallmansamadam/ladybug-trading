@@ -1179,6 +1179,29 @@ async fn book_profit_single(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     info!("💰 Manual profit booking requested for {}", symbol);
     
+    // Get position info BEFORE closing
+    let position_info = match state.alpaca.get_positions().await {
+        Ok(positions) => {
+            positions.iter()
+                .find(|p| p.symbol == symbol)
+                .map(|p| {
+                    let qty = p.qty.parse().unwrap_or(0.0);
+                    let entry = p.avg_entry_price.parse().unwrap_or(0.0);
+                    let current = p.current_price.parse().unwrap_or(0.0);
+                    let pnl = p.unrealized_pl.parse().unwrap_or(0.0);
+                    (qty, entry, current, pnl)
+                })
+        },
+        Err(_) => None,
+    };
+    
+    if position_info.is_none() {
+        error!("❌ Position not found: {}", symbol);
+        return Err(StatusCode::NOT_FOUND);
+    }
+    
+    let (qty, entry_price, current_price, pnl) = position_info.unwrap();
+    
     // Check if it's crypto or stock
     let is_crypto = symbol.contains("/") || 
                    (symbol.ends_with("USD") && 
@@ -1193,14 +1216,27 @@ async fn book_profit_single(
     
     match result {
         Ok(_) => {
+            // Record the trade in history
+            state.trade_history.write().await.push(TradeRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                timestamp: Utc::now().to_rfc3339(),
+                symbol: symbol.clone(),
+                action: "SELL".to_string(),
+                quantity: qty,
+                price: current_price,
+                pnl,
+            });
+            
             state.logger.success(
                 "Manual Profit", 
-                &format!("💰 {} position closed by user", symbol)
+                &format!("💰 {} position closed by user - P&L: ${:.2}", symbol, pnl)
             );
-            info!("✅ Manual profit booked: {}", symbol);
+            info!("✅ Manual profit booked: {} - ${:.2}", symbol, pnl);
+            
             Ok(Json(json!({
                 "success": true,
                 "symbol": symbol,
+                "pnl": pnl,
                 "message": "Position closed successfully"
             })))
         },
@@ -1218,11 +1254,17 @@ async fn book_all_profits(State(state): State<AppState>) -> Result<Json<serde_js
     let mut closed_count = 0;
     let mut failed_count = 0;
     let mut closed_symbols = Vec::new();
+    let mut total_pnl = 0.0;
     
     // Get all positions
     match state.alpaca.get_positions().await {
         Ok(positions) => {
             for pos in positions {
+                let qty = pos.qty.parse().unwrap_or(0.0);
+                let entry = pos.avg_entry_price.parse().unwrap_or(0.0);
+                let current = pos.current_price.parse().unwrap_or(0.0);
+                let pnl = pos.unrealized_pl.parse().unwrap_or(0.0);
+                
                 let is_crypto = pos.symbol.contains("/") || 
                                (pos.symbol.ends_with("USD") && 
                                 !pos.symbol.starts_with("USD") &&
@@ -1236,9 +1278,21 @@ async fn book_all_profits(State(state): State<AppState>) -> Result<Json<serde_js
                 
                 match result {
                     Ok(_) => {
+                        // Record trade in history
+                        state.trade_history.write().await.push(TradeRecord {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            timestamp: Utc::now().to_rfc3339(),
+                            symbol: pos.symbol.clone(),
+                            action: "SELL".to_string(),
+                            quantity: qty,
+                            price: current,
+                            pnl,
+                        });
+                        
                         closed_count += 1;
                         closed_symbols.push(pos.symbol.clone());
-                        info!("✅ Closed {}", pos.symbol);
+                        total_pnl += pnl;
+                        info!("✅ Closed {} - P&L: ${:.2}", pos.symbol, pnl);
                     },
                     Err(e) => {
                         failed_count += 1;
@@ -1258,13 +1312,14 @@ async fn book_all_profits(State(state): State<AppState>) -> Result<Json<serde_js
     
     state.logger.success(
         "Manual Profit", 
-        &format!("💰 Closed {} positions, {} failed", closed_count, failed_count)
+        &format!("💰 Closed {} positions - Total P&L: ${:.2}", closed_count, total_pnl)
     );
     
     Ok(Json(json!({
         "success": true,
         "closed_count": closed_count,
         "failed_count": failed_count,
+        "total_pnl": total_pnl,
         "closed_symbols": closed_symbols
     })))
 }
