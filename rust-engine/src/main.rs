@@ -76,7 +76,7 @@ struct ToggleRequest {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().init();
     
-    info!("🐞 LadyBug Trading Engine v0.1.0");
+    info!("🐞 LadyBug Trading Engine v0.2.0 - Stocks + Crypto");
     
     dotenv::dotenv().ok();
     
@@ -462,10 +462,143 @@ async fn process_stock(state: &AppState, symbol: &str) -> Result<String> {
     Ok("neutral".to_string())
 }
 
+async fn crypto_trading_loop(state: AppState) {
+    let mut tick = interval(Duration::from_secs(120));
+    let crypto_symbols = vec!["BTC/USD", "ETH/USD", "XRP/USD"];
+    
+    loop {
+        tick.tick().await;
+        let crypto_enabled = *state.crypto_trading_enabled.read().await;
+        if !crypto_enabled { continue; }
+        
+        info!("₿ ========== CRYPTO TRADING CYCLE START ==========");
+        state.logger.info("Crypto", "🔄 Starting crypto market analysis");
+        
+        let mut successful_analyses = 0;
+        let mut failed_analyses = 0;
+        let mut buy_signals = 0;
+        let mut sell_signals = 0;
+        
+        for symbol in &crypto_symbols {
+            match process_crypto(&state, symbol).await {
+                Ok(result) => {
+                    successful_analyses += 1;
+                    match result.as_str() {
+                        "buy" => buy_signals += 1,
+                        "sell" => sell_signals += 1,
+                        _ => {}
+                    }
+                }
+                Err(e) => {
+                    failed_analyses += 1;
+                    error!("❌ Error processing crypto {}: {}", symbol, e);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        
+        info!("₿ Crypto Summary: {} analyzed | {} BUY | {} SELL | {} failed", 
+              successful_analyses, buy_signals, sell_signals, failed_analyses);
+        state.logger.info("Crypto", &format!(
+            "Cycle complete: {} cryptos analyzed, {} buy, {} sell",
+            successful_analyses, buy_signals, sell_signals
+        ));
+        info!("₿ ========== CRYPTO TRADING CYCLE END ==========\n");
+    }
+}
+
+async fn process_crypto(state: &AppState, symbol: &str) -> Result<String> {
+    info!("₿ Analyzing {}", symbol);
+    
+    let current_price = match state.crypto.get_latest_crypto_price(symbol).await {
+        Ok(price) => {
+            info!("💰 {} LIVE PRICE: ${:.2}", symbol, price);
+            state.logger.info("Crypto Price", &format!("{}: ${:.2}", symbol, price));
+            price
+        },
+        Err(e) => {
+            warn!("⚠️  {} - Could not fetch crypto price: {}", symbol, e);
+            return Err(e);
+        }
+    };
+    
+    let bars = match state.crypto.get_crypto_bars(symbol, "5Min", 50).await {
+        Ok(bars) if bars.len() >= 20 => {
+            info!("📊 {} - Got {} crypto bars", symbol, bars.len());
+            let converted_bars: Vec<alpaca::Bar> = bars.iter().map(|b| alpaca::Bar {
+                t: b.t.clone(), o: b.o, h: b.h, l: b.l, c: b.c, v: b.v as i64,
+            }).collect();
+            converted_bars
+        }
+        Ok(bars) => {
+            info!("⚠️  {} - Only {} bars, skipping", symbol, bars.len());
+            return Ok("insufficient_data".to_string());
+        }
+        Err(e) => { warn!("❌ {} - Failed to fetch bars: {}", symbol, e); return Err(e); }
+    };
+    
+    let sentiment = state.news.get_sentiment(symbol);
+    let signal = TechnicalAnalysis::generate_signal(&bars, sentiment);
+    info!("₿ {} ANALYSIS: Signal={:.3}, Sentiment={:.3}", symbol, signal, sentiment);
+    state.logger.analysis(&format!("${:.2} | Signal: {:.3} | Sentiment: {:.3}", current_price, signal, sentiment), symbol);
+    
+    let positions = state.alpaca.get_positions().await.unwrap_or_default();
+    let has_position = positions.iter().any(|p| p.symbol == symbol);
+    
+    if signal > 0.25 && !has_position {
+        info!("🟢 {} BUY SIGNAL ({:.3})", symbol, signal);
+        let account = state.alpaca.get_account().await?;
+        let buying_power: f64 = account.buying_power.parse().unwrap_or(0.0);
+        let position_size = (buying_power * 0.02).min(2000.0);
+        let qty = position_size / current_price;
+        
+        if qty > 0.0 {
+            let order = CryptoOrderRequest {
+                symbol: symbol.to_string(), qty: format!("{:.6}", qty),
+                side: "buy".to_string(), order_type: "market".to_string(),
+                time_in_force: "gtc".to_string(),
+            };
+            
+            match state.crypto.place_crypto_order(order).await {
+                Ok(_) => {
+                    info!("✅ CRYPTO ORDER PLACED! {}", symbol);
+                    state.logger.trade(LogLevel::Success, &format!("✅ BUY {:.6} at ${:.2}", qty, current_price), symbol);
+                    state.trade_history.write().await.push(TradeRecord {
+                        id: uuid::Uuid::new_v4().to_string(), timestamp: Utc::now().to_rfc3339(),
+                        symbol: symbol.to_string(), action: "BUY".to_string(),
+                        quantity: qty, price: current_price, pnl: 0.0,
+                    });
+                    return Ok("buy".to_string());
+                },
+                Err(e) => error!("❌ CRYPTO ORDER FAILED: {}", e),
+            }
+        }
+    } else if signal < -0.25 && has_position {
+        if let Some(pos) = positions.iter().find(|p| p.symbol == symbol) {
+            let pnl: f64 = pos.unrealized_pl.parse().unwrap_or(0.0);
+            match state.crypto.close_crypto_position(symbol).await {
+                Ok(_) => {
+                    info!("✅ CRYPTO POSITION CLOSED! {} P&L: ${:.2}", symbol, pnl);
+                    state.logger.trade(LogLevel::Success, &format!("✅ SELL at ${:.2} | P&L: ${:.2}", current_price, pnl), symbol);
+                    state.trade_history.write().await.push(TradeRecord {
+                        id: uuid::Uuid::new_v4().to_string(), timestamp: Utc::now().to_rfc3339(),
+                        symbol: symbol.to_string(), action: "SELL".to_string(),
+                        quantity: pos.qty.parse().unwrap_or(0.0), price: current_price, pnl,
+                    });
+                    return Ok("sell".to_string());
+                },
+                Err(e) => error!("❌ CLOSE FAILED: {}", e),
+            }
+        }
+    }
+    Ok("neutral".to_string())
+}
+
 async fn root() -> Json<serde_json::Value> {
     Json(json!({
         "name": "LadyBug Trading Engine",
-        "version": "0.1.0"
+        "version": "0.2.0",
+        "features": ["stocks", "crypto"]
     }))
 }
 
@@ -475,17 +608,25 @@ async fn health() -> Json<serde_json::Value> {
 
 async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let trading_enabled = *state.trading_enabled.read().await;
+    let crypto_trading_enabled = *state.crypto_trading_enabled.read().await;
     
     let positions_count = match state.alpaca.get_positions().await {
         Ok(positions) => positions.len(),
         Err(_) => 0,
     };
     
+    let crypto_positions_count = match state.alpaca.get_positions().await {
+        Ok(positions) => positions.iter().filter(|p| p.symbol.contains("/")).count(),
+        Err(_) => 0,
+    };
+    
     Json(json!({
         "running": true,
-        "version": "0.1.0",
+        "version": "0.2.0",
         "trading_enabled": trading_enabled,
+        "crypto_trading_enabled": crypto_trading_enabled,
         "active_positions": positions_count,
+        "crypto_positions": crypto_positions_count,
         "mode": "paper_trading"
     }))
 }
@@ -546,6 +687,41 @@ async fn toggle_trading(
     
     info!("Trading {}", if payload.enabled { "ENABLED ✅" } else { "DISABLED ❌" });
     Ok(StatusCode::OK)
+}
+
+async fn toggle_crypto_trading(
+    State(state): State<AppState>,
+    Json(payload): Json<ToggleRequest>,
+) -> Result<StatusCode, StatusCode> {
+    let mut crypto_trading_enabled = state.crypto_trading_enabled.write().await;
+    *crypto_trading_enabled = payload.enabled;
+    
+    if payload.enabled {
+        state.logger.success("Crypto", "Crypto Trading ENABLED ₿✅");
+    } else {
+        state.logger.warning("Crypto", "Crypto Trading DISABLED ❌");
+    }
+    
+    info!("Crypto Trading {}", if payload.enabled { "ENABLED ₿✅" } else { "DISABLED ❌" });
+    Ok(StatusCode::OK)
+}
+
+async fn get_crypto_positions(State(state): State<AppState>) -> Json<Vec<Position>> {
+    match state.alpaca.get_positions().await {
+        Ok(positions) => {
+            let crypto_positions: Vec<Position> = positions.iter()
+                .filter(|p| p.symbol.contains("/"))
+                .map(|p| Position {
+                    symbol: p.symbol.clone(),
+                    quantity: p.qty.parse().unwrap_or(0.0),
+                    entry_price: p.avg_entry_price.parse().unwrap_or(0.0),
+                    current_price: p.current_price.parse().unwrap_or(0.0),
+                    pnl: p.unrealized_pl.parse().unwrap_or(0.0),
+                }).collect();
+            Json(crypto_positions)
+        },
+        Err(_) => Json(vec![]),
+    }
 }
 
 async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
