@@ -40,7 +40,7 @@ impl NewsAggregator {
             }
         }
         
-        let mut tick = interval(Duration::from_secs(180)); // Every 3 minutes
+        let mut tick = interval(Duration::from_secs(600)); // Every 10 minutes - news doesn't change that fast!
 
         loop {
             tick.tick().await;
