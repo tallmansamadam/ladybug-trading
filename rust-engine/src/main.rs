@@ -300,6 +300,23 @@ async fn portfolio_tracking_loop(state: AppState) {
         // Use Alpaca's ACTUAL portfolio_value (includes everything)
         let total_value: f64 = account.portfolio_value.parse().unwrap_or(100000.0);
         let cash: f64 = account.cash.parse().unwrap_or(100000.0);
+        let buying_power: f64 = account.buying_power.parse().unwrap_or(100000.0);
+        
+        // Log every 4th cycle (once per minute) to track values
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 4 == 0 {
+            info!("💰 Portfolio: ${:.2} | Cash: ${:.2} | Buying Power: ${:.2}", 
+                  total_value, cash, buying_power);
+        }
+        
+        // CRITICAL BUG FIX: Alpaca paper trading sometimes returns corrupted values
+        // If portfolio value drops below $10k with no positions, something is wrong!
+        if total_value < 10000.0 && cash < 10000.0 {
+            error!("🚨 CORRUPTED DATA DETECTED! Portfolio: ${:.2}, Cash: ${:.2}", total_value, cash);
+            error!("🚨 This is likely an Alpaca API bug. Skipping this update.");
+            tokio::time::sleep(Duration::from_secs(15)).await;
+            continue;
+        }
         
         // Calculate positions value from total
         let positions_value = total_value - cash;
