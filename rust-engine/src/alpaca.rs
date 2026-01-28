@@ -160,10 +160,15 @@ impl AlpacaClient {
 
         let text = response.text().await?;
         
+        // Debug: Log actual response for troubleshooting
+        if text.contains("null") {
+            tracing::debug!("Alpaca returned null bars for {}: {}", symbol, text);
+        }
+        
         let response_data: BarsResponse = match serde_json::from_str(&text) {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("Failed to parse bars for {}: {}", symbol, e);
+                tracing::warn!("Failed to parse bars for {} - Response: {} - Error: {}", symbol, text, e);
                 return Ok(vec![]);
             }
         };
