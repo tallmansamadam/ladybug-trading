@@ -138,10 +138,11 @@ export default function Dashboard() {
   const currentCash = latestSnapshot.cash
   const currentPositionsValue = latestSnapshot.positions_value
 
-  const startValue = portfolioHistory.length > 0 
-    ? portfolioHistory[0].total_value 
-    : 100000
-
+  // FIX: Start value should be starting capital (100k), not first snapshot
+  // First snapshot might be after test data was generated
+  const startValue = 100000
+  
+  // Calculate actual return based on P&L, not snapshot drift
   const totalReturn = ((currentValue - startValue) / startValue * 100).toFixed(2)
 
   // PROPER ZOOM: Calculate domain based on zoom level
@@ -369,40 +370,49 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <ResponsiveContainer width="100%" height={350}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                <XAxis 
-                  dataKey="index" 
-                  stroke="#fff" 
-                  domain={xDomain}
-                  type="number"
-                  tickFormatter={(value) => {
-                    const point = chartData[value]
-                    return point ? point.time : ''
-                  }}
-                  ticks={Array.from(
-                    { length: Math.min(10, visiblePoints) }, 
-                    (_, i) => Math.floor(startIndex + (i * (endIndex - startIndex) / 9))
-                  )}
-                />
-                <YAxis stroke="#fff" />
-                <Tooltip 
-                  contentStyle={{ background: 'rgba(0,0,0,0.8)', border: 'none', borderRadius: '0.5rem' }}
-                  labelStyle={{ color: '#fff' }}
-                  labelFormatter={(value) => {
-                    const point = chartData[value]
-                    return point ? point.time : ''
-                  }}
-                />
-                <Legend />
-                {showTotalValue && <Line type="monotone" dataKey="value" stroke="#10b981" name="Total Value" strokeWidth={2} dot={false} />}
-                {showCash && <Line type="monotone" dataKey="cash" stroke="#06b6d4" name="Cash" strokeWidth={2} dot={false} />}
-                {showPositions && <Line type="monotone" dataKey="positions" stroke="#f59e0b" name="Holdings" strokeWidth={2} dot={false} />}
-              </LineChart>
-            </ResponsiveContainer>
+            <div style={{ 
+              overflowX: 'auto', 
+              overflowY: 'hidden',
+              width: '100%',
+              paddingBottom: '1rem'
+            }}>
+              <div style={{ minWidth: `${Math.max(100, chartZoom)}%` }}>
+                <ResponsiveContainer width="100%" height={350}>
+                  <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                    <XAxis 
+                      dataKey="index" 
+                      stroke="#fff" 
+                      domain={xDomain}
+                      type="number"
+                      tickFormatter={(value) => {
+                        const point = chartData[value]
+                        return point ? point.time : ''
+                      }}
+                      ticks={Array.from(
+                        { length: Math.min(10, visiblePoints) }, 
+                        (_, i) => Math.floor(startIndex + (i * (endIndex - startIndex) / 9))
+                      )}
+                    />
+                    <YAxis stroke="#fff" />
+                    <Tooltip 
+                      contentStyle={{ background: 'rgba(0,0,0,0.8)', border: 'none', borderRadius: '0.5rem' }}
+                      labelStyle={{ color: '#fff' }}
+                      labelFormatter={(value) => {
+                        const point = chartData[value]
+                        return point ? point.time : ''
+                      }}
+                    />
+                    <Legend />
+                    {showTotalValue && <Line type="monotone" dataKey="value" stroke="#10b981" name="Total Value" strokeWidth={2} dot={false} />}
+                    {showCash && <Line type="monotone" dataKey="cash" stroke="#06b6d4" name="Cash" strokeWidth={2} dot={false} />}
+                    {showPositions && <Line type="monotone" dataKey="positions" stroke="#f59e0b" name="Holdings" strokeWidth={2} dot={false} />}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
             <div style={{ fontSize: '0.75rem', opacity: 0.6, marginTop: '0.5rem', textAlign: 'center' }}>
-              Showing {visiblePoints} of {totalPoints} data points ({chartZoom < 100 ? 'zoomed in' : chartZoom > 100 ? 'zoomed out' : 'normal view'})
+              Showing {visiblePoints} of {totalPoints} data points ({chartZoom < 100 ? 'zoomed in' : chartZoom > 100 ? 'zoomed out' : 'normal view'}) • Scroll horizontally to see more
             </div>
           </div>
         )}
