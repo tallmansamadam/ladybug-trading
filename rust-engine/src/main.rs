@@ -348,6 +348,22 @@ async fn trading_loop(state: AppState) {
             continue;
         }
         
+        // CHECK IF MARKET IS OPEN (9:30 AM - 4:00 PM ET, Monday-Friday)
+        let now = Utc::now().with_timezone(&chrono_tz::America::New_York);
+        let weekday = now.format("%u").to_string().parse::<u32>().unwrap(); // 1=Mon, 7=Sun
+        let is_weekday = weekday <= 5; // Mon-Fri
+        let market_open = chrono::NaiveTime::from_hms_opt(9, 30, 0).unwrap();
+        let market_close = chrono::NaiveTime::from_hms_opt(16, 0, 0).unwrap();
+        let current_time = now.time();
+        
+        let is_market_open = is_weekday && current_time >= market_open && current_time < market_close;
+        
+        if !is_market_open {
+            // Market is closed - skip this cycle
+            info!("📈 Market CLOSED - Skipping stock analysis (opens 9:30 AM ET Mon-Fri)");
+            continue;
+        }
+        
         // Get symbols based on current trading mode
         let mode = state.trading_mode.read().await;
         let symbols = mode.get_stocks();
