@@ -26,3 +26,5 @@ uuid = { version = "1.10", features = ["v4"] }
 rand = "0.8"  # NEW: For random test data generation
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
+rss = "2.0"  # Yahoo Finance RSS feeds
+quick-xml = "0.36"  # XML parsing

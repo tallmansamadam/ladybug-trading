@@ -2,210 +2,166 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tokio::time::{interval, Duration};
 use tracing::{info, error, warn};
-use crate::alpaca::AlpacaClient;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use futures_util::{StreamExt, SinkExt};
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct NewsAggregator {
     sentiment_cache: Arc<DashMap<String, f64>>,
-    alpaca: Arc<AlpacaClient>,
+    client: reqwest::Client,
+    sentiment_service_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SentimentResponse {
+    score: f64,
+    sentiment: String,
+    confidence: f64,
 }
 
 impl NewsAggregator {
-    pub fn new(alpaca: Arc<AlpacaClient>) -> Self {
+    pub fn new() -> Self {
         Self {
             sentiment_cache: Arc::new(DashMap::new()),
-            alpaca,
+            client: reqwest::Client::new(),
+            sentiment_service_url: "http://localhost:5000".to_string(),
         }
     }
 
     pub async fn start(&self) {
-        // Clone for the background task
-        let sentiment_cache = self.sentiment_cache.clone();
-        let alpaca = self.alpaca.clone();
+        info!("📰 Starting News Aggregator with Yahoo RSS + Local FinBERT");
         
-        // Spawn REST API polling task (backup/historical)
-        let rest_task = {
-            let sentiment_cache = sentiment_cache.clone();
-            let alpaca = alpaca.clone();
-            tokio::spawn(async move {
-                Self::rest_polling_task(sentiment_cache, alpaca).await;
-            })
-        };
+        // Check if sentiment service is running
+        match self.check_sentiment_service().await {
+            Ok(()) => info!("✅ FinBERT sentiment service is running"),
+            Err(e) => {
+                error!("❌ FinBERT sentiment service not available: {}", e);
+                error!("💡 Start it with: cd sentiment-service && python sentiment_server.py");
+                return;
+            }
+        }
         
-        // Spawn WebSocket streaming task (real-time)
-        let ws_task = {
-            let sentiment_cache = sentiment_cache.clone();
-            let alpaca = alpaca.clone();
-            tokio::spawn(async move {
-                Self::websocket_stream_task(sentiment_cache, alpaca).await;
-            })
-        };
-        
-        // Wait for both tasks (they run forever)
-        let _ = tokio::join!(rest_task, ws_task);
-    }
-    
-    /// REST API polling task - runs every 5 minutes for backup/historical data
-    async fn rest_polling_task(
-        sentiment_cache: Arc<DashMap<String, f64>>,
-        alpaca: Arc<AlpacaClient>,
-    ) {
-        let mut tick = interval(Duration::from_secs(300)); // Every 5 minutes
+        let mut tick = interval(Duration::from_secs(180)); // Every 3 minutes
 
         loop {
             tick.tick().await;
             
-            // Update sentiment for commonly traded symbols
-            let symbols = vec!["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", 
-                             "META", "NFLX", "NVDA"];
+            // Symbols to track
+            let symbols = vec![
+                "AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", 
+                "META", "NFLX", "NVDA", "GME", "PLTR",
+                "RIOT", "COIN", "MSTR"
+            ];
             
             for symbol in symbols {
-                match alpaca.get_news_sentiment(symbol).await {
-                    Ok(sentiment) => {
-                        sentiment_cache.insert(symbol.to_string(), sentiment);
-                        info!("📰 REST: {} sentiment updated to {:.3}", symbol, sentiment);
-                    }
-                    Err(e) => {
-                        error!("Failed to fetch REST sentiment for {}: {}", symbol, e);
-                    }
+                if let Err(e) = self.fetch_and_analyze_news(symbol).await {
+                    warn!("Failed to fetch news for {}: {}", symbol, e);
                 }
+                
+                // Small delay to avoid hammering Yahoo
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
     }
     
-    /// WebSocket streaming task - real-time news as it happens
-    async fn websocket_stream_task(
-        sentiment_cache: Arc<DashMap<String, f64>>,
-        alpaca: Arc<AlpacaClient>,
-    ) {
-        loop {
-            info!("🔌 Connecting to Alpaca News WebSocket...");
+    async fn check_sentiment_service(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("{}/health", self.sentiment_service_url);
+        let response = self.client.get(&url).send().await?;
+        
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err("Sentiment service not healthy".into())
+        }
+    }
+    
+    async fn fetch_and_analyze_news(&self, symbol: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Fetch Yahoo Finance RSS feed for symbol
+        let rss_url = format!("https://finance.yahoo.com/rss/headline?s={}", symbol);
+        
+        let response = self.client
+            .get(&rss_url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            return Err(format!("Yahoo RSS returned {}", response.status()).into());
+        }
+        
+        let rss_content = response.text().await?;
+        
+        // Parse RSS feed
+        let channel = rss::Channel::read_from(rss_content.as_bytes())?;
+        
+        if channel.items().is_empty() {
+            info!("📰 No news found for {}", symbol);
+            return Ok(());
+        }
+        
+        // Get the latest 5 headlines
+        let headlines: Vec<String> = channel.items()
+            .iter()
+            .take(5)
+            .filter_map(|item| item.title().map(|t| t.to_string()))
+            .collect();
+        
+        if headlines.is_empty() {
+            return Ok(());
+        }
+        
+        info!("📰 {} - Found {} headlines", symbol, headlines.len());
+        
+        // Analyze sentiment of all headlines
+        let sentiments = self.analyze_batch_sentiment(&headlines).await?;
+        
+        // Average the sentiment scores
+        if !sentiments.is_empty() {
+            let avg_sentiment: f64 = sentiments.iter().sum::<f64>() / sentiments.len() as f64;
             
-            match Self::run_websocket_stream(&sentiment_cache, &alpaca).await {
-                Ok(_) => {
-                    warn!("WebSocket stream ended normally, reconnecting...");
-                }
-                Err(e) => {
-                    error!("WebSocket error: {}, reconnecting in 10s...", e);
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                }
-            }
-        }
-    }
-    
-    async fn run_websocket_stream(
-        sentiment_cache: &Arc<DashMap<String, f64>>,
-        alpaca: &Arc<AlpacaClient>,
-    ) -> Result<(), anyhow::Error> {
-        // Connect to Alpaca News WebSocket
-        let url = "wss://stream.data.alpaca.markets/v1beta1/news";
-        let (ws_stream, _) = connect_async(url).await?;
-        
-        info!("✅ Connected to Alpaca News WebSocket");
-        
-        let (mut write, mut read) = ws_stream.split();
-        
-        // Authenticate
-        let api_key = std::env::var("ALPACA_API_KEY")?;
-        let api_secret = std::env::var("ALPACA_API_SECRET")?;
-        
-        let auth_msg = json!({
-            "action": "auth",
-            "key": api_key,
-            "secret": api_secret
-        });
-        
-        write.send(Message::Text(auth_msg.to_string())).await?;
-        info!("🔑 Sent authentication");
-        
-        // Subscribe to news for our symbols
-        let symbols = vec!["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", 
-                          "META", "NFLX", "NVDA", "GME", "PLTR"];
-        
-        let subscribe_msg = json!({
-            "action": "subscribe",
-            "news": symbols
-        });
-        
-        write.send(Message::Text(subscribe_msg.to_string())).await?;
-        info!("📡 Subscribed to news for {} symbols", symbols.len());
-        
-        // Process incoming news
-        while let Some(message) = read.next().await {
-            match message {
-                Ok(Message::Text(text)) => {
-                    if let Err(e) = Self::process_news_message(&text, sentiment_cache) {
-                        warn!("Failed to process news message: {}", e);
-                    }
-                }
-                Ok(Message::Close(_)) => {
-                    info!("WebSocket closed by server");
-                    break;
-                }
-                Ok(Message::Ping(data)) => {
-                    write.send(Message::Pong(data)).await?;
-                }
-                Err(e) => {
-                    error!("WebSocket receive error: {}", e);
-                    break;
-                }
-                _ => {}
-            }
+            self.sentiment_cache.insert(symbol.to_string(), avg_sentiment);
+            
+            info!("🤖 {} - Sentiment: {:.3} (from {} headlines)", 
+                  symbol, avg_sentiment, sentiments.len());
         }
         
         Ok(())
     }
     
-    fn process_news_message(
-        text: &str,
-        sentiment_cache: &Arc<DashMap<String, f64>>,
-    ) -> Result<(), anyhow::Error> {
-        let value: serde_json::Value = serde_json::from_str(text)?;
+    async fn analyze_batch_sentiment(&self, texts: &[String]) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
+        let url = format!("{}/batch", self.sentiment_service_url);
         
-        // Check message type
-        if let Some(msg_type) = value.get("T").and_then(|v| v.as_str()) {
-            match msg_type {
-                "success" => {
-                    info!("✅ {}", value.get("msg").and_then(|v| v.as_str()).unwrap_or("Success"));
-                }
-                "subscription" => {
-                    info!("📡 Subscription confirmed");
-                }
-                "n" => {
-                    // News article!
-                    if let Some(symbols) = value.get("symbols").and_then(|v| v.as_array()) {
-                        let headline = value.get("headline")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown");
-                        
-                        let sentiment_score = value.get("sentiment_score")
-                            .and_then(|v| v.as_f64())
-                            .unwrap_or(0.0);
-                        
-                        // Update sentiment for all mentioned symbols
-                        for symbol in symbols {
-                            if let Some(sym) = symbol.as_str() {
-                                sentiment_cache.insert(sym.to_string(), sentiment_score);
-                                info!("⚡ LIVE NEWS: {} - '{}' (sentiment: {:.3})", 
-                                      sym, headline, sentiment_score);
-                            }
-                        }
-                    }
-                }
-                "error" => {
-                    let msg = value.get("msg").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-                    warn!("❌ WebSocket error: {}", msg);
-                }
-                _ => {
-                    // Unknown message type, ignore
-                }
-            }
+        #[derive(Serialize)]
+        struct BatchRequest {
+            texts: Vec<String>,
         }
         
-        Ok(())
+        #[derive(Deserialize)]
+        struct BatchResponse {
+            results: Vec<SentimentResponse>,
+        }
+        
+        let request = BatchRequest {
+            texts: texts.to_vec(),
+        };
+        
+        let response = self.client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            return Err(format!("Sentiment service returned {}", response.status()).into());
+        }
+        
+        let batch_response: BatchResponse = response.json().await?;
+        
+        let scores: Vec<f64> = batch_response.results
+            .iter()
+            .map(|r| r.score)
+            .collect();
+        
+        Ok(scores)
     }
 
     pub fn get_sentiment(&self, symbol: &str) -> f64 {
