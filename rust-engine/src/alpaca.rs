@@ -59,6 +59,7 @@ pub struct Bar {
 
 #[derive(Debug, Deserialize)]
 struct BarsResponse {
+    #[serde(default)]
     bars: Vec<Bar>,
 }
 
