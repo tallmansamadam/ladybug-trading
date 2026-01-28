@@ -291,19 +291,27 @@ async fn portfolio_tracking_loop(state: AppState) {
     loop {
         tick.tick().await;
         
-        // Calculate current portfolio value
-        let positions = match state.alpaca.get_positions().await {
+        // Calculate current portfolio value from REAL positions
+        let real_positions = match state.alpaca.get_positions().await {
             Ok(p) => p,
             Err(_) => vec![],
         };
         
-        let positions_value: f64 = positions.iter()
+        let real_positions_value: f64 = real_positions.iter()
             .map(|p| {
                 let qty: f64 = p.qty.parse().unwrap_or(0.0);
                 let price: f64 = p.current_price.parse().unwrap_or(0.0);
                 qty * price
             })
             .sum();
+        
+        // Add TEST positions value
+        let test_positions = state.test_positions.read().await;
+        let test_positions_value: f64 = test_positions.iter()
+            .map(|p| p.market_value)
+            .sum();
+        
+        let positions_value = real_positions_value + test_positions_value;
         
         let account = match state.alpaca.get_account().await {
             Ok(acc) => acc,
