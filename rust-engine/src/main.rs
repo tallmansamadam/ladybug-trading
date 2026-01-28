@@ -281,8 +281,9 @@ async fn shutdown_signal() {
 }
 
 async fn portfolio_tracking_loop(state: AppState) {
-    // RATE LIMIT FRIENDLY: Update portfolio every 60 seconds (plenty fast for tracking)
-    let mut tick = interval(Duration::from_secs(60));
+    // OPTIMAL: 15 seconds - smooth chart updates without overwhelming UI
+    // 2 API calls/cycle = 8 calls/min (4% of limit)
+    let mut tick = interval(Duration::from_secs(15));
     
     loop {
         tick.tick().await;
@@ -336,9 +337,9 @@ async fn demo_loop(state: AppState) {
 }
 
 async fn trading_loop(state: AppState) {
-    // RATE LIMIT FRIENDLY: Slower cycles to avoid hitting Alpaca limits
-    // Stock cycle: 5 minutes for sustainable trading
-    let mut tick = interval(Duration::from_secs(300));
+    // OPTIMAL: 30 seconds - fast enough to trade, slow enough to stay safe
+    // With 20 symbols = 40 API calls/cycle = 80 calls/min (40% of limit)
+    let mut tick = interval(Duration::from_secs(30));
     
     loop {
         tick.tick().await;
@@ -608,8 +609,9 @@ async fn process_stock(state: &AppState, symbol: &str) -> Result<String> {
 }
 
 async fn crypto_trading_loop(state: AppState) {
-    // RATE LIMIT FRIENDLY: 10 minutes for crypto (markets are 24/7, no rush)
-    let mut tick = interval(Duration::from_secs(600));
+    // OPTIMAL: 60 seconds - crypto moves fast, need responsive updates
+    // With 5 cryptos = 10 API calls/cycle = 10 calls/min (5% of limit)
+    let mut tick = interval(Duration::from_secs(60));
     
     loop {
         tick.tick().await;

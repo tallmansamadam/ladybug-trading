@@ -40,7 +40,7 @@ impl NewsAggregator {
             }
         }
         
-        let mut tick = interval(Duration::from_secs(600)); // Every 10 minutes - news doesn't change that fast!
+        let mut tick = interval(Duration::from_secs(300)); // Every 5 minutes - fresh sentiment without spam
 
         loop {
             tick.tick().await;
