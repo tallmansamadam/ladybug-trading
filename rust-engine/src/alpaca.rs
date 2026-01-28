@@ -48,6 +48,7 @@ pub struct OrderRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct NewsArticle {
     pub headline: String,
     pub summary: String,
@@ -249,8 +250,8 @@ impl AlpacaClient {
     }
 
     pub async fn get_news_sentiment(&self, symbol: &str) -> Result<f64> {
-        // Use Alpaca News API v1beta1
-        let url = format!("{}/v1beta1/news", self.base_url);
+        // News API uses data URL, not base_url!
+        let url = format!("{}/v1beta1/news", self.data_url);
         
         let response = self.client
             .get(&url)
