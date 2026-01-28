@@ -24,3 +24,5 @@ async-trait = "0.1"
 dashmap = "6.1"
 uuid = { version = "1.10", features = ["v4"] }
 rand = "0.8"  # NEW: For random test data generation
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"

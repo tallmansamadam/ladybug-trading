@@ -253,6 +253,9 @@ impl AlpacaClient {
         // News API uses data URL, not base_url!
         let url = format!("{}/v1beta1/news", self.data_url);
         
+        tracing::debug!("📰 News API URL: {}", url);
+        tracing::debug!("📰 Requesting news for: {}", symbol);
+        
         let response = self.client
             .get(&url)
             .header("APCA-API-KEY-ID", &self.api_key)
@@ -267,7 +270,10 @@ impl AlpacaClient {
             .context(format!("Failed to fetch news for {}", symbol))?;
 
         if !response.status().is_success() {
-            tracing::warn!("Alpaca news API error for {}: {}", symbol, response.status());
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            tracing::warn!("Alpaca news API error for {}: {} - Response: {}", 
+                          symbol, status, body);
             return Ok(0.0); // Default to neutral
         }
 
