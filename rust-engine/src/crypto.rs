@@ -12,6 +12,7 @@ pub struct CryptoClient {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct CryptoPosition {
     pub symbol: String,
     pub qty: String,
@@ -22,6 +23,7 @@ pub struct CryptoPosition {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct CryptoBar {
     pub t: String,
     pub o: f64,

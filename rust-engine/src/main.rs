@@ -1008,7 +1008,7 @@ async fn book_profit_single(
         return Err(StatusCode::NOT_FOUND);
     }
     
-    let (qty, entry_price, current_price, pnl) = position_info.unwrap();
+    let (qty, _entry_price, current_price, pnl) = position_info.unwrap();
     
     // Check if it's crypto or stock
     let is_crypto = symbol.contains("/") || 
@@ -1069,7 +1069,7 @@ async fn book_all_profits(State(state): State<AppState>) -> Result<Json<serde_js
         Ok(positions) => {
             for pos in positions {
                 let qty = pos.qty.parse().unwrap_or(0.0);
-                let entry = pos.avg_entry_price.parse().unwrap_or(0.0);
+                let _entry = pos.avg_entry_price.parse().unwrap_or(0.0);
                 let current = pos.current_price.parse().unwrap_or(0.0);
                 let pnl = pos.unrealized_pl.parse().unwrap_or(0.0);
                 

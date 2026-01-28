@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::sync::Arc;
 use dashmap::DashMap;
 
@@ -79,6 +79,7 @@ impl ActivityLogger {
         self.log(LogLevel::Warning, category, message, None);
     }
 
+    #[allow(dead_code)]
     pub fn error(&self, category: &str, message: &str) {
         self.log(LogLevel::Error, category, message, None);
     }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use dashmap::DashMap;
 use tokio::time::{interval, Duration};
@@ -27,6 +27,7 @@ struct RedditChild {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct RedditPostData {
     title: String,
     selftext: String,

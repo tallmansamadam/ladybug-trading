@@ -48,6 +48,7 @@ pub struct OrderRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct Bar {
     pub t: String,
     pub o: f64,

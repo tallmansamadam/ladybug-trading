@@ -1,5 +1,4 @@
 use crate::alpaca::Bar;
-use rand::Rng;
 
 pub struct TechnicalAnalysis;
 
@@ -43,6 +42,7 @@ impl TechnicalAnalysis {
         Some(sum / period as f64)
     }
 
+    #[allow(dead_code)]
     pub fn calculate_ema(bars: &[Bar], period: usize) -> Option<f64> {
         if bars.len() < period {
             return None;
