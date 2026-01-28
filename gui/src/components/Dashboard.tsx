@@ -102,14 +102,7 @@ export default function Dashboard() {
     }
   }
 
-  const generateTestData = async () => {
-    try {
-      await axios.post(`${API_URL}/test/generate`)
-      setTimeout(fetchData, 1000)
-    } catch (err) {
-      console.error(err)
-    }
-  }
+  // TEST DATA REMOVED - USING ONLY REAL ALPACA PAPER TRADING
 
   const symbols = ['ALL', ...new Set(tradeHistory.map(t => t.symbol))]
 
@@ -268,20 +261,6 @@ export default function Dashboard() {
             }}
           >
             {status?.trading_enabled ? 'Stop Trading' : 'Start Trading'}
-          </button>
-          <button
-            onClick={generateTestData}
-            style={{
-              padding: '0.75rem 1.5rem',
-              background: '#8b5cf6',
-              border: 'none',
-              borderRadius: '0.5rem',
-              color: '#fff',
-              cursor: 'pointer',
-              fontWeight: 'bold'
-            }}
-          >
-            🧪 Generate Test Data
           </button>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
             <button onClick={() => setSelectedView('portfolio')} style={{
@@ -518,7 +497,7 @@ export default function Dashboard() {
             {positions.length === 0 && (
               <div style={{ textAlign: 'center', padding: '3rem', opacity: 0.6, fontSize: '1.1rem' }}>
                 📭 No active positions yet.<br/>
-                <span style={{ fontSize: '0.9rem' }}>Click "Generate Test Data" to create sample positions or wait for trading signals.</span>
+                <span style={{ fontSize: '0.9rem' }}>Trading engine will analyze markets and place trades when signals are detected.</span>
               </div>
             )}
           </div>

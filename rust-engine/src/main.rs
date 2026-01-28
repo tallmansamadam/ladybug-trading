@@ -37,9 +37,8 @@ struct AppState {
     logger: Arc<ActivityLogger>,
     portfolio_history: Arc<RwLock<Vec<PortfolioSnapshot>>>,
     trade_history: Arc<RwLock<Vec<TradeRecord>>>,
-    test_positions: Arc<RwLock<Vec<Position>>>,
     news_symbols: Arc<RwLock<Vec<String>>>,
-    trading_mode: Arc<RwLock<TradingMode>>,  // NEW: Trading strategy selector
+    trading_mode: Arc<RwLock<TradingMode>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -172,14 +171,13 @@ async fn main() -> Result<()> {
         logger: logger.clone(),
         portfolio_history: Arc::new(RwLock::new(vec![initial_snapshot])),
         trade_history: Arc::new(RwLock::new(vec![])),
-        test_positions: Arc::new(RwLock::new(vec![])),
         news_symbols: Arc::new(RwLock::new(vec![
             "AAPL".to_string(),
             "GOOGL".to_string(),
             "BTC/USD".to_string(),
             "ETH/USD".to_string(),
         ])),
-        trading_mode: Arc::new(RwLock::new(TradingMode::Hybrid)),  // Default to Hybrid mode
+        trading_mode: Arc::new(RwLock::new(TradingMode::Hybrid)),
     };
     
     // Log startup status
@@ -234,8 +232,6 @@ async fn main() -> Result<()> {
         .route("/news/symbols", post(set_news_symbols))
         .route("/trading-mode", get(get_trading_mode))
         .route("/trading-mode", post(set_trading_mode))
-        .route("/test/generate", post(generate_test_data))
-        .route("/test/clear", post(clear_test_data))
         .route("/book-profit/:symbol", post(book_profit_single))
         .route("/book-all-profits", post(book_all_profits))
         .layer(tower_http::cors::CorsLayer::permissive())
@@ -291,55 +287,21 @@ async fn portfolio_tracking_loop(state: AppState) {
     loop {
         tick.tick().await;
         
-        // Check if we have test positions (demo mode)
-        let test_positions = state.test_positions.read().await;
-        let has_test_data = !test_positions.is_empty();
-        
-        let (cash, positions_value, total_value) = if has_test_data {
-            // DEMO MODE: Use pure test data, ignore Alpaca account
-            let test_positions_value: f64 = test_positions.iter()
-                .map(|p| p.market_value)
-                .sum();
-            
-            // Calculate remaining cash (starting capital - invested)
-            let starting_capital = 100000.0;
-            let invested: f64 = test_positions.iter()
-                .map(|p| p.entry_price * p.quantity)
-                .sum();
-            let demo_cash = starting_capital - invested;
-            let demo_total = demo_cash + test_positions_value;
-            
-            (demo_cash, test_positions_value, demo_total)
-        } else {
-            // REAL MODE: Use Alpaca account data
-            let real_positions = match state.alpaca.get_positions().await {
-                Ok(p) => p,
-                Err(_) => vec![],
-            };
-            
-            let real_positions_value: f64 = real_positions.iter()
-                .map(|p| {
-                    let qty: f64 = p.qty.parse().unwrap_or(0.0);
-                    let price: f64 = p.current_price.parse().unwrap_or(0.0);
-                    qty * price
-                })
-                .sum();
-            
-            let account = match state.alpaca.get_account().await {
-                Ok(acc) => acc,
-                Err(_) => {
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    continue;
-                }
-            };
-            
-            let real_cash: f64 = account.cash.parse().unwrap_or(100000.0);
-            let real_total = real_cash + real_positions_value;
-            
-            (real_cash, real_positions_value, real_total)
+        // Get REAL account data from Alpaca
+        let account = match state.alpaca.get_account().await {
+            Ok(acc) => acc,
+            Err(_) => {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                continue;
+            }
         };
         
-        drop(test_positions);
+        // Use Alpaca's ACTUAL portfolio_value (includes everything)
+        let total_value: f64 = account.portfolio_value.parse().unwrap_or(100000.0);
+        let cash: f64 = account.cash.parse().unwrap_or(100000.0);
+        
+        // Calculate positions value from total
+        let positions_value = total_value - cash;
         
         let snapshot = PortfolioSnapshot {
             timestamp: Utc::now().to_rfc3339(),
@@ -870,10 +832,7 @@ async fn get_positions(State(state): State<AppState>) -> Json<Vec<Position>> {
         Err(_) => {}
     }
     
-    // Add test positions
-    let test_positions = state.test_positions.read().await;
-    all_positions.extend(test_positions.clone());
-    
+    // ONLY REAL ALPACA POSITIONS - NO TEST DATA
     Json(all_positions)
 }
 
@@ -992,188 +951,8 @@ async fn get_crypto_positions(State(state): State<AppState>) -> Json<Vec<Positio
     }
 }
 
-async fn generate_test_data(State(state): State<AppState>) -> StatusCode {
-    state.logger.info("Test", "🧪 Generating test data with LIVE prices...");
-    
-    let mut test_positions = state.test_positions.write().await;
-    test_positions.clear();
-    
-    // Get symbols from CURRENT trading mode
-    let mode = state.trading_mode.read().await;
-    let stock_symbols = mode.get_stocks();
-    let crypto_symbols = mode.get_crypto();
-    
-    info!("📊 Generating test data for mode: {:?}", *mode);
-    info!("   Stocks: {} symbols", stock_symbols.len());
-    info!("   Crypto: {} symbols", crypto_symbols.len());
-    
-    // Fetch LIVE prices for stocks
-    for symbol in stock_symbols {
-        match state.alpaca.get_latest_quote(symbol).await {
-            Ok(current_price) => {
-                let entry_multiplier = rand::random::<f64>() * 0.16 - 0.08; // -8% to +8%
-                let entry_price = current_price / (1.0 + entry_multiplier);
-                let quantity = (rand::random::<f64>() * 15.0 + 5.0).floor(); // 5-20 shares
-                
-                let pnl = (current_price - entry_price) * quantity;
-                let pnl_percent = ((current_price - entry_price) / entry_price) * 100.0;
-                let market_value = current_price * quantity;
-                
-                test_positions.push(Position {
-                    symbol: symbol.to_string(),
-                    quantity,
-                    entry_price,
-                    current_price,
-                    pnl,
-                    pnl_percent,
-                    market_value,
-                    asset_type: "stock".to_string(),
-                });
-                
-                state.logger.info("Test", &format!("📈 {} @ ${:.2}", symbol, current_price));
-            },
-            Err(e) => {
-                state.logger.warning("Test", &format!("⚠️ Failed to get price for {}: {}", symbol, e));
-            }
-        }
-    }
-    
-    // Fetch LIVE prices for crypto from current mode
-    for symbol in crypto_symbols {
-        match state.crypto.get_latest_crypto_price(symbol).await {
-            Ok(current_price) => {
-                let entry_multiplier = rand::random::<f64>() * 0.24 - 0.12; // -12% to +12%
-                let entry_price = current_price / (1.0 + entry_multiplier);
-                
-                let quantity = if symbol.contains("BTC") {
-                    rand::random::<f64>() * 0.2 + 0.05 // 0.05-0.25 BTC
-                } else if symbol.contains("ETH") {
-                    rand::random::<f64>() * 3.5 + 1.5 // 1.5-5.0 ETH
-                } else {
-                    (rand::random::<f64>() * 2000.0 + 1000.0).floor() // 1000-3000 XRP
-                };
-                
-                let pnl = (current_price - entry_price) * quantity;
-                let pnl_percent = ((current_price - entry_price) / entry_price) * 100.0;
-                let market_value = current_price * quantity;
-                
-                test_positions.push(Position {
-                    symbol: symbol.to_string(),
-                    quantity,
-                    entry_price,
-                    current_price,
-                    pnl,
-                    pnl_percent,
-                    market_value,
-                    asset_type: "crypto".to_string(),
-                });
-                
-                state.logger.info("Test", &format!("₿ {} @ ${:.2}", symbol, current_price));
-            },
-            Err(e) => {
-                state.logger.warning("Test", &format!("⚠️ Failed to get price for {}: {}", symbol, e));
-            }
-        }
-    }
-    
-    let total = test_positions.len();
-    drop(test_positions);
-    
-    // Generate portfolio snapshots
-    let base_time = Utc::now();
-    let mut portfolio_history = state.portfolio_history.write().await;
-    portfolio_history.clear();
-    
-    let initial = 100000.0;
-    for i in 0..30 {
-        let trend = (i as f64) * 100.0;
-        let volatility = (rand::random::<f64>() * 1300.0) - 500.0;
-        let total_value = initial + trend + volatility;
-        let pos_pct = rand::random::<f64>() * 0.30 + 0.15;
-        let positions_value = total_value * pos_pct;
-        
-        portfolio_history.push(PortfolioSnapshot {
-            timestamp: (base_time - chrono::Duration::minutes(30 - i)).to_rfc3339(),
-            total_value,
-            cash: total_value - positions_value,
-            positions_value,
-        });
-    }
-    drop(portfolio_history);
-    
-    // Generate trade history
-    let mut trade_history = state.trade_history.write().await;
-    trade_history.clear();
-    
-    let all_symbols = vec!["AAPL", "GOOGL", "NVDA", "TSLA", "BTC/USD", "ETH/USD"];
-    for i in 0..(rand::random::<usize>() % 7 + 8) {
-        let symbol = all_symbols[rand::random::<usize>() % all_symbols.len()];
-        let action = if i % 3 == 0 { "SELL" } else { "BUY" };
-        let qty = if symbol.contains("/") {
-            rand::random::<f64>() * 1.9 + 0.1
-        } else {
-            (rand::random::<f64>() * 15.0 + 5.0).floor()
-        };
-        let price = if symbol.contains("BTC") {
-            rand::random::<f64>() * 20000.0 + 85000.0
-        } else if symbol.contains("ETH") {
-            rand::random::<f64>() * 1000.0 + 3000.0
-        } else {
-            rand::random::<f64>() * 350.0 + 150.0
-        };
-        let pnl = if action == "SELL" {
-            qty * (rand::random::<f64>() * 200.0 - 50.0)
-        } else {
-            0.0
-        };
-        
-        trade_history.push(TradeRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            timestamp: (base_time - chrono::Duration::minutes(30 - i as i64 * 2)).to_rfc3339(),
-            symbol: symbol.to_string(),
-            action: action.to_string(),
-            quantity: qty,
-            price,
-            pnl,
-        });
-    }
-    
-    let trades = trade_history.len();
-    drop(trade_history);
-    
-    state.logger.success("Test", &format!("✓ Generated {} positions (LIVE prices), {} trades", total, trades));
-    StatusCode::OK
-}
+// TEST DATA FUNCTIONS REMOVED - USING ONLY REAL ALPACA PAPER TRADING
 
-
-async fn clear_test_data(State(state): State<AppState>) -> StatusCode {
-    state.logger.info("Test", "🧹 Clearing test data...");
-    
-    // Clear test positions
-    let mut test_positions = state.test_positions.write().await;
-    test_positions.clear();
-    drop(test_positions);
-    
-    // Clear portfolio history (reset to initial)
-    let mut portfolio_history = state.portfolio_history.write().await;
-    portfolio_history.clear();
-    portfolio_history.push(PortfolioSnapshot {
-        timestamp: Utc::now().to_rfc3339(),
-        total_value: 100000.0,
-        cash: 100000.0,
-        positions_value: 0.0,
-    });
-    drop(portfolio_history);
-    
-    // Clear trade history
-    let mut trade_history = state.trade_history.write().await;
-    trade_history.clear();
-    drop(trade_history);
-    
-    state.logger.success("Test", "✓ Test data cleared successfully");
-    
-    StatusCode::OK
-}
 
 // Get current trading mode
 async fn get_trading_mode(State(state): State<AppState>) -> Json<TradingMode> {
