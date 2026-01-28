@@ -291,38 +291,55 @@ async fn portfolio_tracking_loop(state: AppState) {
     loop {
         tick.tick().await;
         
-        // Calculate current portfolio value from REAL positions
-        let real_positions = match state.alpaca.get_positions().await {
-            Ok(p) => p,
-            Err(_) => vec![],
-        };
-        
-        let real_positions_value: f64 = real_positions.iter()
-            .map(|p| {
-                let qty: f64 = p.qty.parse().unwrap_or(0.0);
-                let price: f64 = p.current_price.parse().unwrap_or(0.0);
-                qty * price
-            })
-            .sum();
-        
-        // Add TEST positions value
+        // Check if we have test positions (demo mode)
         let test_positions = state.test_positions.read().await;
-        let test_positions_value: f64 = test_positions.iter()
-            .map(|p| p.market_value)
-            .sum();
+        let has_test_data = !test_positions.is_empty();
         
-        let positions_value = real_positions_value + test_positions_value;
-        
-        let account = match state.alpaca.get_account().await {
-            Ok(acc) => acc,
-            Err(_) => {
-                tokio::time::sleep(Duration::from_secs(30)).await;
-                continue;
-            }
+        let (cash, positions_value, total_value) = if has_test_data {
+            // DEMO MODE: Use pure test data, ignore Alpaca account
+            let test_positions_value: f64 = test_positions.iter()
+                .map(|p| p.market_value)
+                .sum();
+            
+            // Calculate remaining cash (starting capital - invested)
+            let starting_capital = 100000.0;
+            let invested: f64 = test_positions.iter()
+                .map(|p| p.entry_price * p.quantity)
+                .sum();
+            let demo_cash = starting_capital - invested;
+            let demo_total = demo_cash + test_positions_value;
+            
+            (demo_cash, test_positions_value, demo_total)
+        } else {
+            // REAL MODE: Use Alpaca account data
+            let real_positions = match state.alpaca.get_positions().await {
+                Ok(p) => p,
+                Err(_) => vec![],
+            };
+            
+            let real_positions_value: f64 = real_positions.iter()
+                .map(|p| {
+                    let qty: f64 = p.qty.parse().unwrap_or(0.0);
+                    let price: f64 = p.current_price.parse().unwrap_or(0.0);
+                    qty * price
+                })
+                .sum();
+            
+            let account = match state.alpaca.get_account().await {
+                Ok(acc) => acc,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    continue;
+                }
+            };
+            
+            let real_cash: f64 = account.cash.parse().unwrap_or(100000.0);
+            let real_total = real_cash + real_positions_value;
+            
+            (real_cash, real_positions_value, real_total)
         };
         
-        let cash: f64 = account.cash.parse().unwrap_or(100000.0);
-        let total_value = cash + positions_value;
+        drop(test_positions);
         
         let snapshot = PortfolioSnapshot {
             timestamp: Utc::now().to_rfc3339(),
