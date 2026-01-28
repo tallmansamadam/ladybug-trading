@@ -47,6 +47,21 @@ pub struct OrderRequest {
     pub time_in_force: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct NewsArticle {
+    pub headline: String,
+    pub summary: String,
+    #[serde(default)]
+    pub sentiment: String,
+    #[serde(default)]
+    pub sentiment_score: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct NewsResponse {
+    pub news: Vec<NewsArticle>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct Bar {
@@ -231,5 +246,53 @@ impl AlpacaClient {
             .await?;
 
         Ok(())
+    }
+
+    pub async fn get_news_sentiment(&self, symbol: &str) -> Result<f64> {
+        // Use Alpaca News API v1beta1
+        let url = format!("{}/v1beta1/news", self.base_url);
+        
+        let response = self.client
+            .get(&url)
+            .header("APCA-API-KEY-ID", &self.api_key)
+            .header("APCA-API-SECRET-KEY", &self.api_secret)
+            .query(&[
+                ("symbols", symbol),
+                ("limit", "10"),
+                ("sort", "desc"),
+            ])
+            .send()
+            .await
+            .context(format!("Failed to fetch news for {}", symbol))?;
+
+        if !response.status().is_success() {
+            tracing::warn!("Alpaca news API error for {}: {}", symbol, response.status());
+            return Ok(0.0); // Default to neutral
+        }
+
+        let news_response: NewsResponse = match response.json().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Failed to parse news for {}: {}", symbol, e);
+                return Ok(0.0);
+            }
+        };
+
+        if news_response.news.is_empty() {
+            tracing::debug!("No news articles found for {}", symbol);
+            return Ok(0.0);
+        }
+
+        // Average the sentiment scores from recent articles
+        let total_sentiment: f64 = news_response.news.iter()
+            .map(|article| article.sentiment_score)
+            .sum();
+        
+        let avg_sentiment = total_sentiment / news_response.news.len() as f64;
+        
+        tracing::info!("📰 {} NEWS: {} articles, avg sentiment: {:.3}", 
+                      symbol, news_response.news.len(), avg_sentiment);
+        
+        Ok(avg_sentiment.clamp(-1.0, 1.0))
     }
 }

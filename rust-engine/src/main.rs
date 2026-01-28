@@ -149,7 +149,7 @@ async fn main() -> Result<()> {
     
     let alpaca = Arc::new(AlpacaClient::new(api_key.clone(), api_secret.clone(), true));
     let crypto = Arc::new(CryptoClient::new(api_key, api_secret, true));
-    let news = Arc::new(NewsAggregator::new());
+    let news = Arc::new(NewsAggregator::new(alpaca.clone())); // Pass Alpaca client
     let logger = Arc::new(ActivityLogger::new());
     
     logger.success("System", "LadyBug Trading Engine started");
